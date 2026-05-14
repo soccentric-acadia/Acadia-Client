@@ -77,7 +77,9 @@ void DiagSocket::accept_loop() {
             response = std::string(R"({"error":")") + e.what() + "\"}";
         }
         response += "\n";
-        (void)::write(client_fd, response.c_str(), response.size());
+        if (::write(client_fd, response.c_str(), response.size()) < 0) {
+            // best-effort diagnostic response; ignore write failures
+        }
         ::close(client_fd);
     }
 }
