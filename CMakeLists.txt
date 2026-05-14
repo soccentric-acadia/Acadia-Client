@@ -7,6 +7,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 include(cmake/CompilerWarnings.cmake)
 include(FetchContent)
+include(GNUInstallDirs)
 
 # ---------------------------------------------------------------------------
 # Dependencies
@@ -243,13 +244,15 @@ endif()
 # Install
 # ---------------------------------------------------------------------------
 
-install(TARGETS acadia-client RUNTIME DESTINATION bin)
+install(TARGETS acadia-client
+  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+)
 install(FILES conf/client.conf.sample
-  DESTINATION /etc/acadia
+  DESTINATION ${CMAKE_INSTALL_SYSCONFDIR}/acadia
   RENAME client.conf
   OPTIONAL
 )
 install(FILES systemd/acadia-client.service
-  DESTINATION /lib/systemd/system
+  DESTINATION ${CMAKE_INSTALL_LIBDIR}/systemd/system
   OPTIONAL
 )

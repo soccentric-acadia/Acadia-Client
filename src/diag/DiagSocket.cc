@@ -77,7 +77,7 @@ void DiagSocket::accept_loop() {
             response = std::string(R"({"error":")") + e.what() + "\"}";
         }
         response += "\n";
-        ::write(client_fd, response.c_str(), response.size());
+        (void)::write(client_fd, response.c_str(), response.size());
         ::close(client_fd);
     }
 }

@@ -112,7 +112,7 @@ bool App::init() {
     // 7. Diagnostic socket (T045)
     diag_socket_ = std::make_unique<DiagSocket>(
         "/run/acadia/client.sock",
-        [this](const std::string& query) -> std::string {
+        [this](const std::string& /*query*/) -> std::string {
             auto states = spool_->all_run_states();
             std::string r = R"({"connected":)";
             r += stream_->is_connected() ? "true" : "false";
