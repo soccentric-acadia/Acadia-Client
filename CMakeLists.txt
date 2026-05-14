@@ -52,9 +52,28 @@ endif()
 # SQLite3
 find_package(SQLite3 REQUIRED)
 
-# gRPC + Protobuf (system preferred; cross-compile from Yocto SDK)
-find_package(gRPC REQUIRED)
+# gRPC + Protobuf (CMake config preferred; pkg-config fallback for Ubuntu 22.04)
 find_package(Protobuf REQUIRED)
+find_package(gRPC CONFIG QUIET)
+if(gRPC_FOUND)
+  message(STATUS "[acadia-client] gRPC ${gRPC_VERSION} via CMake config")
+  set(ACADIA_GRPC_LIBRARIES gRPC::grpc++ gRPC::grpc)
+  get_target_property(GRPC_CPP_PLUGIN gRPC::grpc_cpp_plugin LOCATION)
+else()
+  find_package(PkgConfig REQUIRED)
+  pkg_check_modules(GRPCPP REQUIRED grpc++)
+  message(STATUS "[acadia-client] gRPC via pkg-config")
+  set(ACADIA_GRPC_LIBRARIES ${GRPCPP_LIBRARIES})
+  find_program(GRPC_CPP_PLUGIN grpc_cpp_plugin
+    HINTS /usr/local/bin /usr/bin /usr/lib/grpc
+          /usr/lib/aarch64-linux-gnu /usr/lib/x86_64-linux-gnu
+    DOC "Path to the grpc_cpp_plugin protoc plugin")
+  if(NOT GRPC_CPP_PLUGIN)
+    message(FATAL_ERROR "[acadia-client] grpc_cpp_plugin not found. "
+      "Rebuild the Docker image or pass -DGRPC_CPP_PLUGIN=/path/to/grpc_cpp_plugin.")
+  endif()
+endif()
+message(STATUS "[acadia-client] grpc_cpp_plugin: ${GRPC_CPP_PLUGIN}")
 
 # ---------------------------------------------------------------------------
 # Proto generation
@@ -79,7 +98,7 @@ add_custom_command(
         --proto_path=${PROTO_DIR}
         --cpp_out=${PROTO_GEN_DIR}
         --grpc_out=${PROTO_GEN_DIR}
-        --plugin=protoc-gen-grpc=$<TARGET_FILE:gRPC::grpc_cpp_plugin>
+        --plugin=protoc-gen-grpc=${GRPC_CPP_PLUGIN}
         ${PROTO_DIR}/common.proto
         ${PROTO_DIR}/hal_service.proto
         ${PROTO_DIR}/client_service.proto
@@ -94,7 +113,7 @@ add_library(acadia_protos STATIC ${PROTO_SRCS})
 target_include_directories(acadia_protos PUBLIC ${PROTO_GEN_DIR})
 target_link_libraries(acadia_protos PUBLIC
     protobuf::libprotobuf
-    gRPC::grpc++
+    ${ACADIA_GRPC_LIBRARIES}
 )
 
 # ---------------------------------------------------------------------------

@@ -21,21 +21,6 @@
 #include <string>
 #include <variant>
 
-// Forward declarations for generated proto headers
-// (included in ResultSerializer.cc).
-namespace hal  { enum class Status; enum class Severity; struct TestOutput; struct TestResult; using Value = std::variant<bool, int64_t, double, std::string>; }
-namespace hal::common { class TestStatus; class TestSeverity; class TypedValue; class TestOutput; class TestResult; }
-namespace google::protobuf { class Timestamp; class Duration; }
-
-// ─── include order note ────────────────────────────────────────────────────
-// Implementation includes:
-//   common.pb.h          (generated)
-//   lib_base.h           (hal:: types)
-//   google/protobuf/timestamp.pb.h
-//   google/protobuf/duration.pb.h
-// ──────────────────────────────────────────────────────────────────────────
-
-// Bring in the real hal:: types so callers only need this header.
 #include "lib_base.h"
 #include "common.pb.h"
 #include <google/protobuf/timestamp.pb.h>

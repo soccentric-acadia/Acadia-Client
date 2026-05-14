@@ -1,18 +1,23 @@
 # Master Makefile for ACU Full Test Project
 # Supports both native and Docker-based builds with Ninja
 
-.PHONY: all build configure clean format cppcheck doc test help
-.PHONY: docker-build docker-configure docker-clean docker-shell docker-install docker-image
+.PHONY: all build configure clean test format cppcheck doc help
+.PHONY: docker-build docker-configure docker-clean docker-shell docker-install docker-image docker-test
 .PHONY: deploy deploy-a deploy-b run run-a run-b list setup-completion
 
 # Build directories (separate to avoid CMake cache conflicts)
 NATIVE_BUILD_DIR := build/native
-CROSS_BUILD_DIR := build/cross
+CROSS_BUILD_DIR  := build/cross
 
 # Parallel jobs (override with make JOBS=N)
 JOBS := $(shell nproc)
 DOCKER_IMAGE := acadia
-DOCKER_CROSS_BUILD_DIR := /workspace/build/cross
+
+# Mount the *parent* Acadia/ directory so both Acadia-Client and Acadia-HAL
+# are visible inside the container (CMakeLists.txt references ../Acadia-HAL/...).
+ACADIA_ROOT := $(shell dirname $(realpath $(CURDIR)))
+DOCKER_SRC_DIR         := /workspace/Acadia-Client
+DOCKER_CROSS_BUILD_DIR := $(DOCKER_SRC_DIR)/build/cross
 
 # Host architecture as shown by file(1) (e.g. x86-64, aarch64)
 HOST_ARCH := $(shell uname -m | sed 's/x86_64/x86-64/')
@@ -79,11 +84,15 @@ endef
 configure:
 	@echo "Configuring project with Ninja..."
 	mkdir -p $(NATIVE_BUILD_DIR)
-	cd $(NATIVE_BUILD_DIR) && cmake -GNinja $(CURDIR)
+	cd $(NATIVE_BUILD_DIR) && cmake -GNinja -DBUILD_TESTS=ON $(CURDIR)
 
 build: configure
 	@echo "Building project with Ninja..."
 	cd $(NATIVE_BUILD_DIR) && ninja -j$(JOBS)
+
+test: build
+	@echo "Running tests natively..."
+	cd $(NATIVE_BUILD_DIR) && ctest --output-on-failure
 
 run: build
 	$(call run_local)
@@ -109,7 +118,8 @@ list:
 # -t: allocate a pseudo-TTY so Ctrl-C (SIGINT) is forwarded to the container
 # --init: use tini as PID 1 to properly propagate signals to child processes (e.g. ninja)
 # ccache volume: persist compilation cache across docker runs
-DOCKER_RUN := docker run --rm -t --init --platform linux/arm64 -v $(PWD):/workspace -v ccache-acu:/home/rpi/.ccache $(DOCKER_IMAGE) bash -c
+# ACADIA_ROOT is mounted so ../Acadia-HAL/protos and ../Acadia-HAL/src resolve inside the container.
+DOCKER_RUN := docker run --rm -t --init --platform linux/arm64 -v $(ACADIA_ROOT):/workspace -v ccache-acadia-client:/home/rpi/.ccache $(DOCKER_IMAGE) bash -c
 
 docker-install:
 	@if ! command -v docker > /dev/null 2>&1; then \
@@ -129,11 +139,15 @@ docker-image: docker-install
 
 docker-configure: docker-image
 	@echo "Configuring project with Docker/Ninja..."
-	$(DOCKER_RUN) "mkdir -p $(DOCKER_CROSS_BUILD_DIR) && cd $(DOCKER_CROSS_BUILD_DIR) && cmake -GNinja /workspace"
+	$(DOCKER_RUN) "mkdir -p $(DOCKER_CROSS_BUILD_DIR) && cd $(DOCKER_CROSS_BUILD_DIR) && cmake -GNinja -DBUILD_TESTS=ON $(DOCKER_SRC_DIR)"
 
 docker-build: docker-image
 	@echo "Building project with Docker/Ninja..."
-	$(DOCKER_RUN) "if [ ! -f $(DOCKER_CROSS_BUILD_DIR)/build.ninja ]; then mkdir -p $(DOCKER_CROSS_BUILD_DIR) && cd $(DOCKER_CROSS_BUILD_DIR) && cmake -GNinja /workspace; fi && cd $(DOCKER_CROSS_BUILD_DIR) && ninja -j$(JOBS)"
+	$(DOCKER_RUN) "if [ ! -f $(DOCKER_CROSS_BUILD_DIR)/build.ninja ]; then mkdir -p $(DOCKER_CROSS_BUILD_DIR) && cd $(DOCKER_CROSS_BUILD_DIR) && cmake -GNinja -DBUILD_TESTS=ON $(DOCKER_SRC_DIR); fi && cd $(DOCKER_CROSS_BUILD_DIR) && ninja -j$(JOBS)"
+
+docker-test: docker-build
+	@echo "Running tests in Docker (ARM64 via QEMU)..."
+	$(DOCKER_RUN) "cd $(DOCKER_CROSS_BUILD_DIR) && ctest --output-on-failure"
 
 docker-clean: docker-image
 	@echo "Cleaning Docker build directory..."
@@ -141,7 +155,7 @@ docker-clean: docker-image
 
 docker-shell: docker-image
 	@echo "Starting Docker shell for development..."
-	docker run -it --rm --platform linux/arm64 -v $(PWD):/workspace -v ccache-acu:/home/rpi/.ccache $(DOCKER_IMAGE) bash
+	docker run -it --rm --platform linux/arm64 -v $(ACADIA_ROOT):/workspace -v ccache-acadia-client:/home/rpi/.ccache $(DOCKER_IMAGE) bash
 
 # =============================================================================
 # Deploy & Run (on target device)
