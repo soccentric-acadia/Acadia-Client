@@ -26,6 +26,9 @@ struct ClientConfig {
     // Extra log paths to tail
     std::vector<std::string> log_paths;
 
+    // Path to modules.yaml (read-only reference to HAL registry)
+    std::string modules_yaml_path{"/etc/acadia/modules.yaml"};
+
     // TLS (empty = plaintext; used in a later step)
     std::string tls_ca;
     std::string tls_cert;
