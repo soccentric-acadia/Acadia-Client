@@ -109,6 +109,12 @@ add_executable(acadia-client
   src/spool/Spool.cc
   src/stream/StreamClient.cc
   src/registry/ModuleRegistry.cc
+  src/registry/AdapterRegistry.cc
+  src/registry/adapters/stub_adapter.cc
+  src/registry/adapters/cpu_adapter.cc
+  src/registry/adapters/thermal_adapter.cc
+  src/registry/adapters/system_memory_adapter.cc
+  src/hal_bridge/ResultSerializer.cc
   src/run/RunOrchestrator.cc
   src/log/LogCollector.cc
   src/janitor/Janitor.cc
@@ -116,7 +122,11 @@ add_executable(acadia-client
   src/ota/OtaClient.cc
 )
 
-target_include_directories(acadia-client PRIVATE src ${PROTO_GEN_DIR})
+target_include_directories(acadia-client PRIVATE
+  src
+  ${PROTO_GEN_DIR}
+  ${CMAKE_SOURCE_DIR}/../Acadia-HAL/src
+)
 
 target_link_libraries(acadia-client PRIVATE
   acadia_protos
@@ -134,6 +144,71 @@ target_compile_definitions(acadia-client PRIVATE
 
 
 set_compiler_warnings(acadia-client)
+
+# ---------------------------------------------------------------------------
+# Tests
+# ---------------------------------------------------------------------------
+
+option(BUILD_TESTS "Build unit and integration tests" ON)
+if(BUILD_TESTS)
+  enable_testing()
+
+  # GTest (fetched if not found)
+  find_package(GTest QUIET)
+  if(NOT GTest_FOUND)
+    FetchContent_Declare(
+      googletest
+      GIT_REPOSITORY https://github.com/google/googletest.git
+      GIT_TAG        v1.14.0
+      GIT_SHALLOW    TRUE
+    )
+    set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
+    FetchContent_MakeAvailable(googletest)
+  endif()
+
+  # Serializer unit tests
+  add_executable(test_result_serializer
+    tests/test_result_serializer.cc
+    src/hal_bridge/ResultSerializer.cc
+  )
+  target_include_directories(test_result_serializer PRIVATE
+    src
+    ${PROTO_GEN_DIR}
+    ${CMAKE_SOURCE_DIR}/../Acadia-HAL/src
+  )
+  target_link_libraries(test_result_serializer PRIVATE
+    acadia_protos
+    spdlog::spdlog
+    GTest::gtest_main
+  )
+  add_test(NAME serializer_tests COMMAND test_result_serializer)
+
+  # Runner integration tests
+  add_executable(test_run_orchestrator
+    tests/test_run_orchestrator.cc
+    src/hal_bridge/ResultSerializer.cc
+    src/registry/AdapterRegistry.cc
+    src/registry/adapters/stub_adapter.cc
+    src/spool/Spool.cc
+    src/stream/StreamClient.cc
+    src/run/RunOrchestrator.cc
+  )
+  target_include_directories(test_run_orchestrator PRIVATE
+    src
+    ${PROTO_GEN_DIR}
+    ${CMAKE_SOURCE_DIR}/../Acadia-HAL/src
+  )
+  target_link_libraries(test_run_orchestrator PRIVATE
+    acadia_protos
+    spdlog::spdlog
+    SQLite::SQLite3
+    yaml-cpp::yaml-cpp
+    gRPC::grpc++
+    protobuf::libprotobuf
+    GTest::gtest_main
+  )
+  add_test(NAME runner_tests COMMAND test_run_orchestrator)
+endif()
 
 # ---------------------------------------------------------------------------
 # Optional sanitizers

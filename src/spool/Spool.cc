@@ -4,8 +4,9 @@
 #include <spdlog/spdlog.h>
 
 #include <chrono>
-#include <stdexcept>
 #include <cstring>
+#include <filesystem>
+#include <stdexcept>
 
 namespace acadia::client {
 
@@ -20,11 +21,64 @@ static int64_t now_ns() {
 }
 
 // ---------------------------------------------------------------------------
+// Legacy quarantine (Section 4.5 of req.md)
+// ---------------------------------------------------------------------------
+
+bool Spool::quarantine_if_legacy(const std::string& path) {
+    // Fast path: database doesn't exist yet.
+    if (!std::filesystem::exists(path)) return false;
+
+    // Open read-only to check the stored version.
+    sqlite3* db = nullptr;
+    if (sqlite3_open_v2(path.c_str(), &db,
+                         SQLITE_OPEN_READONLY, nullptr) != SQLITE_OK) {
+        sqlite3_close(db);
+        return false;  // Can't read — let the main open handle the error.
+    }
+
+    int stored_ver = 0;
+    const char* ver_sql =
+        "SELECT value FROM spool_meta WHERE key='schema_version' LIMIT 1";
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(db, ver_sql, -1, &stmt, nullptr) == SQLITE_OK) {
+        if (sqlite3_step(stmt) == SQLITE_ROW)
+            stored_ver = sqlite3_column_int(stmt, 0);
+        sqlite3_finalize(stmt);
+    }
+    sqlite3_close(db);
+
+    if (stored_ver >= kCurrentSchemaVersion) return false;
+
+    // Incompatible schema: quarantine.
+    try {
+        namespace fs = std::filesystem;
+        fs::path src(path);
+        fs::path legacy_dir = src.parent_path() / ".legacy";
+        fs::create_directories(legacy_dir);
+        // Name: original_stem.<unix_seconds>.db
+        int64_t ts = std::chrono::duration_cast<std::chrono::seconds>(
+                         std::chrono::system_clock::now().time_since_epoch())
+                         .count();
+        fs::path dst = legacy_dir / (src.stem().string() + "." +
+                                      std::to_string(ts) + ".db");
+        fs::rename(src, dst);
+        spdlog::warn("[BUFFER-INCOMPATIBLE] spool schema version {} < {} — "
+                     "quarantined to {}; starting fresh",
+                     stored_ver, kCurrentSchemaVersion, dst.string());
+    } catch (const std::exception& e) {
+        spdlog::error("spool: quarantine failed: {}", e.what());
+    }
+    return true;
+}
+
+// ---------------------------------------------------------------------------
 // Spool ctor/dtor
 // ---------------------------------------------------------------------------
 
 Spool::Spool(const std::string& path, uint64_t result_cap, uint64_t log_cap)
-    : result_cap_(result_cap), log_cap_(log_cap) {
+    : result_cap_(result_cap), log_cap_(log_cap), path_(path) {
+    quarantine_if_legacy(path);
+
     int rc = sqlite3_open(path.c_str(), &db_);
     if (rc != SQLITE_OK) {
         throw std::runtime_error(std::string("spool open failed: ") +
@@ -34,6 +88,7 @@ Spool::Spool(const std::string& path, uint64_t result_cap, uint64_t log_cap)
     exec("PRAGMA synchronous=NORMAL");
     exec("PRAGMA foreign_keys=ON");
     apply_schema();
+    write_schema_version(kCurrentSchemaVersion);
     spdlog::info("spool: opened {}", path);
 }
 
@@ -47,6 +102,11 @@ Spool::~Spool() {
 
 void Spool::apply_schema() {
     exec(R"(
+        CREATE TABLE IF NOT EXISTS spool_meta (
+            key   TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );
+
         CREATE TABLE IF NOT EXISTS batches (
             run_id     TEXT    NOT NULL,
             batch_seq  INTEGER NOT NULL,
@@ -314,6 +374,38 @@ std::vector<Spool::RunStateRow> Spool::all_run_states() const {
     }
     sqlite3_finalize(stmt);
     return rows;
+}
+
+// ---------------------------------------------------------------------------
+// Schema version helpers
+// ---------------------------------------------------------------------------
+
+void Spool::write_schema_version(int version) {
+    std::lock_guard<std::mutex> lk(mtx_);
+    const char* sql =
+        "INSERT INTO spool_meta(key, value) VALUES ('schema_version', ?) "
+        "ON CONFLICT(key) DO UPDATE SET value=excluded.value";
+    sqlite3_stmt* stmt;
+    sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr);
+    std::string v = std::to_string(version);
+    sqlite3_bind_text(stmt, 1, v.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+}
+
+int Spool::stored_schema_version() const {
+    std::lock_guard<std::mutex> lk(mtx_);
+    const char* sql =
+        "SELECT value FROM spool_meta WHERE key='schema_version' LIMIT 1";
+    sqlite3_stmt* stmt;
+    if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK)
+        return 0;
+    int ver = 0;
+    if (sqlite3_step(stmt) == SQLITE_ROW)
+        ver = std::stoi(
+            reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0)));
+    sqlite3_finalize(stmt);
+    return ver;
 }
 
 } // namespace acadia::client

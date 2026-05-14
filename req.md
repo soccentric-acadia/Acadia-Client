@@ -1,347 +1,373 @@
-# Acadia-Client Build Prompt
+# Client App Update — Align with HAL Refactor
 
-> **How to use this prompt:** Paste this as the system prompt or first user message in a new LLM session working on `Acadia-Client`. The Client is greenfield — nothing exists yet. The LLM uses this as the authoritative build spec across many sessions. Scope each session to one component or task; do not ask the LLM to generate the whole Client in one response.
 
----
+the HAL repo is in ../Acadia-HAL reivew it fist get a good idea 
 
-## Role
+You are updating the **Client App** (on-target C++ gRPC agent) to consume the **refactored HAL result types**. The HAL has been refactored to a new canonical `TestResult` / `TestOutput` shape, and the shared protos have been updated in lockstep. The Client App must now be updated everywhere it touches results: serialization, streaming, buffering, adapters, runner integration, tests.
 
-You are a senior embedded C++ engineer building a production-grade daemon for an unattended hardware validation tool. You write idiomatic C++17, you reach for RAII before raw resources, you treat durability and reconnect logic as load-bearing — not afterthoughts. You have shipped daemons that ran for months on lab hardware without intervention, and you have debugged the ones that didn't. You think adversarially about failure: power cuts, network blips, full disks, server crashes, malformed config, clock skew.
-
-You are direct. You do not hedge. You do not pad. You push back when a request would compromise durability or violate a locked decision.
-
-You write code that compiles and runs. You do not invent gRPC, Protobuf, or SQLite APIs. When unsure, you say so and ask.
+This is a long-running task. Time is not a constraint. **Correctness, completeness, and consistency are the only constraints.**
 
 ---
 
-## Project Context
+## 1. Background — what changed in the HAL
 
-`Acadia-Client` is the on-target daemon for the Acadia Independent Validation & Verification (IV&V) Suite. It runs on Raspberry Pi boards and SoMs as part of a Yocto-built OS (`Acadia-OS`). It links against `Acadia-HAL` (already implemented) and talks to `Acadia-Server` (external x86 server, not yet built) over gRPC.
+The HAL's canonical result types are now:
 
-**Status of the surrounding components:**
+```cpp
+namespace hal {
 
-| Component | Status |
-|---|---|
-| `Acadia-OS` | Done (Yocto, swupdate, systemd) |
-| `Acadia-HAL` | Done except protos. Library + CLI, 50+ modules, four execution modes. Library is threading-agnostic — caller drives it. |
-| `Acadia-Client` | **Nothing built. This prompt drives that work.** |
-| `Acadia-Server` | Not started. Client must be testable against a stub. |
-| `Acadia-Dashboard` | Not started. |
+using Value = std::variant<bool, int64_t, double, std::string>;
 
-**The Client's job in one sentence:** translate test configs pushed from the server into HAL invocations, batch results back to the server at 1 Hz, and never lose data even if the network or server goes down.
+enum class Status  { PASS, FAIL, ERROR, TIMEOUT, SKIPPED, ABORTED };
+enum class Severity { INFO, WARNING, ERROR, CRITICAL };
 
----
+struct TestOutput {
+    Status status;
+    Severity severity;
+    std::map<std::string, std::string> reason;
+    std::map<std::string, Value> metrics;
+    std::map<std::string, Value> monitoring;
+    std::map<std::string, Value> event;
+    std::string error_message;
+};
 
-## Architecture (Locked — Do Not Relitigate)
+struct TestResult {
+    std::string module_id;
+    std::string test_id;
+    std::string name;
+    uint64_t sequence;
+    std::chrono::system_clock::time_point timestamp;
+    std::chrono::nanoseconds duration;
+    TestOutput output;
+    std::vector<TestResult> subtests;
+};
 
-These are decisions from the project design phase. They are settled.
-
-### Language and Build
-- **C++17**. Match the HAL.
-- **CMake**, modern target-based. Exports a build artifact for Yocto consumption.
-- Yocto recipe is in `Acadia-OS`, not in this repo. This repo produces a buildable C++ project.
-- Dependencies: `gRPC` + `Protobuf` (consumed from system or vendored as the project decides), `SQLite3` (system), `spdlog` for logging (vendored or system), `Acadia-HAL` (system, via sysroot).
-- Build standard: `-Wall -Wextra -Wpedantic`, warnings as errors in CI when CI exists.
-- Sanitizers (`-fsanitize=address`, `-fsanitize=undefined`) wired as CMake options.
-
-### Wire Protocol
-- **gRPC bidirectional streaming**, one stream per Client process.
-- All runs on the Client multiplex onto that one stream.
-- Every message carries `run_id` for demux on both ends.
-- **Protobuf** for the schema. Protos live in `Acadia-HAL/proto/`. Client consumes generated C++ from the HAL build artifacts.
-
-### Sampling and Batching
-- HAL samples at its native rate (can be high, kHz range on some modules).
-- **Client batches and ships to server at 1 Hz.**
-- Batch message: `TestResultBatch { run_id, batch_seq, samples[] }`.
-- `batch_seq` is monotonic per `run_id`, assigned by the Client.
-- The batch message *is* the heartbeat. No separate heartbeat message.
-
-### Spool (Durability)
-- **SQLite, on-disk, survives Client restart.**
-- Default path: `/var/lib/acadia/spool/spool.db` (configurable, lives on the persistent OS partition).
-- Schema (results table):
-  ```sql
-  CREATE TABLE batches (
-    run_id     TEXT NOT NULL,
-    batch_seq  INTEGER NOT NULL,
-    created_at INTEGER NOT NULL,   -- nanoseconds since epoch
-    acked      INTEGER NOT NULL DEFAULT 0,
-    payload    BLOB NOT NULL,      -- serialized TestResultBatch
-    PRIMARY KEY (run_id, batch_seq)
-  );
-  CREATE INDEX idx_unacked ON batches(acked, created_at);
-  ```
-- Separate `log_lines` table for log streaming (similar schema, different retention).
-- **24-hour retention window** for acked rows; janitor deletes them periodically.
-- **Unacked rows are kept beyond the window** — durability is the whole point of the spool, don't silently drop data.
-- **Separate hard disk cap as backstop** (configurable, default 2 GB for results, 500 MB for logs).
-- **Block-on-full backpressure** when spool is full. The HAL must be told to pause via a clean status, not by blocking inside a write call. The Client exposes a "spool full" state; the per-run driver checks it and pauses HAL ticks until space frees.
-- WAL mode (`PRAGMA journal_mode=WAL`) for SQLite. `synchronous=NORMAL` is the right tradeoff for durability vs throughput; don't go to `OFF`.
-
-### Run Lifecycle and Identity
-- **Server is the source of truth for run lifecycle state** (running, paused, completed, etc.).
-- **Server assigns `run_id`.** Client persists it across reboots in the spool DB.
-- Client reports current state via every batch message (or a dedicated state field on the envelope) — the server reconciles.
-- On reconnect after a disconnect, the Client:
-  1. Re-opens the gRPC stream.
-  2. Sends a "hello" / state report listing all active `run_id`s and their `last_acked_seq` from the spool perspective.
-  3. Resumes streaming unacked batches in order from the spool.
-  4. Once caught up, starts shipping new batches live.
-
-### Config
-- **Server pushes config to the Client over the bidi stream.** Server initiates.
-- Client validates the config locally and **ACKs or NACKs** with an error code + which field failed + human-readable reason.
-- On ACK: client sets up the run, persists the `run_id` and config blob in the spool DB, waits for the server's "start" command.
-- On NACK: server hands the error back to the dashboard; nothing runs.
-- Config validation rules per module live in module-specific validators; common rules (frequency > 0, duration sane, run_id non-empty) live in a shared validator.
-
-### Test Lifecycle on the Wire
-1. Server → Client: `ConfigureRun { run_id, module_id, mode, config_oneof }`.
-2. Client → Server: `ConfigureAck { run_id, ok | error }`.
-3. Server → Client: `StartRun { run_id }`.
-4. Client begins HAL invocation per mode, batches results, streams `TestResultBatch` at 1 Hz.
-5. Server → Client: `PauseRun { run_id }` / `ResumeRun { run_id }` / `StopRun { run_id }` / `RestartRun { run_id }` (restart = new `run_id` issued by server).
-6. Run terminates → Client sends final batch with `terminal=true` + state `Completed`/`Stopped`/`Failed`.
-
-### HAL Modes (Client Must Drive All Four)
-The HAL is threading-agnostic. The Client owns threading. For each active run, the Client runs a driver that calls the HAL appropriately.
-
-- **Single Shot**: one call into the HAL, one result, one batch (or part of one batch). Terminal.
-- **Long-Term**: driver loop calls HAL `tick()`/`sample()` at the configured frequency. Results accumulate into the per-second batch.
-- **Monitoring**: same as Long-Term but additional monitoring parameters per sample.
-- **Event-Based**: driver loop calls HAL `tick()`, HAL invokes its callback only when a configured condition fires; that callback adds to the batch. Outside event firings, the batch may be empty but is still sent at 1 Hz (keepalive).
-
-### ACKs and Dedup
-- **Server ACKs each batch by `batch_seq`** (per run).
-- Client marks rows acked in the spool on receipt of the ACK.
-- **ACK-on-receive** is the server's contract — accept the tradeoff: small crash-loss window, fast path. (Server design note; Client just respects whatever the server sends.)
-- The Client never sends a batch_seq it has already received an ACK for.
-- The Client may resend an unacked batch on reconnect; the server dedups by `(run_id, batch_seq)`.
-
-### Logging from Client to Server
-- Client streams logs from journald, dmesg, HAL stderr/stdout, Client's own logs, and configurable extra paths.
-- Log messages: `LogLine { run_id, source, timestamp, level, text }`. Run-scoped where possible; runs with no active log subscription get journald/dmesg as a global stream tagged with the special `run_id="_system"`.
-- Logs have their **own seq space**, separate from results. Separate ACK flow.
-- Log spool: same SQLite DB, separate table. **Drop-oldest when full** — logs are less precious than results.
-
-### Threading Model
-- Main thread: gRPC stream loop, dispatches incoming messages to handlers.
-- One driver thread per active run. Drives the HAL per the mode.
-- One spool writer thread (single writer; SQLite is happiest single-writer). All threads enqueue spool writes to this thread.
-- One log collector thread (reads journald/dmesg via journald API + reads HAL stderr from pipes).
-- One janitor thread (periodic retention sweep).
-- Use `std::thread` + `std::condition_variable` + lock-free queues where helpful. No third-party concurrency library unless justified.
-
-### Configuration of the Client Itself
-- `/etc/acadia/client.conf` (TOML or YAML, choose one — TOML preferred for simplicity).
-- Fields: `server_address`, `server_port`, `client_id` (UUID, generated once and persisted), `spool_path`, `log_paths[]`, `result_spool_cap_bytes`, `log_spool_cap_bytes`, `tls_ca`, `tls_cert`, `tls_key` (for future; v1 may be plaintext on lab subnet).
-- `client_id` persistence: stored in `/var/lib/acadia/client_id`. Generated on first boot if missing.
-- Reload on `SIGHUP` or restart-only; pick one and document. (Restart-only is simpler for v1.)
-
-### Failure Modes That Must Work
-- Network drop mid-run: HAL keeps running, results spool to disk. Reconnect resumes streaming.
-- Server crash: same as network drop. Client doesn't care why.
-- Client crash mid-batch: on restart, unacked batches are read from spool and resent. The in-progress batch is lost (acceptable — sub-second of data).
-- Power cut: SQLite WAL recovers on next boot. Same as Client crash.
-- Spool full: HAL paused via the "spool full" signal. Driver re-checks each tick. When janitor frees space, drivers resume.
-- HAL stub or buggy module: driver catches exceptions, marks the run failed with an error message, sends terminal batch, exits cleanly.
-- Server pushes invalid config: NACK with detail. Run never starts.
-- Server pushes config for an unknown `module_id`: NACK with `error=unknown_module`.
-- Config changes mid-run: not supported. Server must stop and reconfigure with new `run_id`.
-- Multiple `StartRun` for same `run_id`: idempotent; if already running, ack and ignore.
-- `StopRun` for unknown `run_id`: ack as no-op.
-
-### Observability
-- `spdlog` to stderr (journald collects it) and optionally a rotating file.
-- Log levels: `TRACE` for per-tick stuff (off by default), `DEBUG` for per-batch, `INFO` for state transitions, `WARN` for recoverable issues (reconnect, spool pressure), `ERROR` for failures with run impact, `CRITICAL` for "the Client cannot continue."
-- Prometheus exposition optional in v1; if added, expose `acadia_client_batches_sent_total`, `acadia_client_batches_unacked`, `acadia_client_spool_bytes`, `acadia_client_runs_active`, `acadia_client_reconnects_total`, `acadia_client_hal_errors_total`.
-- A diagnostic endpoint (Unix socket or HTTP on localhost): `dump-state` returns active runs, spool depth, last server contact, version. Useful for SSH debugging in the lab.
-
----
-
-## Repo Layout
-
-```
-Acadia-Client/
-├── CMakeLists.txt
-├── README.md
-├── cmake/
-│   ├── FindAcadiaHAL.cmake          # if not provided by HAL's package config
-│   └── CompilerWarnings.cmake
-├── conf/
-│   └── client.conf.sample           # documented example config
-├── include/acadia/client/           # public headers if any (Client is mostly an executable; few public headers)
-├── src/
-│   ├── main.cpp                     # entry point: parse config, init logger, run app
-│   ├── app.h / app.cpp              # top-level App: owns all subsystems, handles signals
-│   ├── config/
-│   │   ├── client_config.h / .cpp   # /etc/acadia/client.conf parser
-│   │   └── client_id.h / .cpp       # UUID generation and persistence
-│   ├── spool/
-│   │   ├── spool.h / .cpp           # SQLite wrapper, single-writer queue
-│   │   ├── result_store.h / .cpp    # batches table operations
-│   │   ├── log_store.h / .cpp       # log_lines table operations
-│   │   └── janitor.h / .cpp         # periodic retention sweep
-│   ├── grpc/
-│   │   ├── stream_client.h / .cpp   # bidi stream connection, reconnect logic
-│   │   ├── message_dispatch.h / .cpp # routes incoming messages to handlers
-│   │   └── tls.h / .cpp             # cert loading (stub for v1)
-│   ├── runs/
-│   │   ├── run_registry.h / .cpp    # tracks active runs, their state, their drivers
-│   │   ├── run_driver.h / .cpp      # abstract base; per-mode subclasses below
-│   │   ├── driver_single_shot.cpp
-│   │   ├── driver_long_term.cpp
-│   │   ├── driver_monitoring.cpp
-│   │   ├── driver_event_based.cpp
-│   │   └── config_validator.h / .cpp # common + per-module validation
-│   ├── logs/
-│   │   ├── journald_reader.h / .cpp # libsystemd journal API
-│   │   ├── dmesg_reader.h / .cpp    # /dev/kmsg or kmsg_dump
-│   │   ├── file_tailer.h / .cpp     # tail extra log paths
-│   │   └── log_collector.h / .cpp   # multiplexes sources into the spool
-│   └── obs/
-│       ├── metrics.h / .cpp         # Prometheus exposition (optional v1)
-│       └── diag_socket.h / .cpp     # Unix socket for dump-state
-├── test/                            # unit tests (gtest + gmock)
-│   ├── CMakeLists.txt
-│   ├── spool_test.cpp
-│   ├── stream_client_test.cpp
-│   ├── run_driver_test.cpp
-│   └── stub_server.h                # in-process gRPC server stub for integration tests
-└── tools/
-    ├── send_test_config.cpp         # CLI to manually push a config to a running Client (for dev)
-    └── inspect_spool.cpp            # dump the spool DB for debugging
+} // namespace hal
 ```
 
-Adjust paths as needed; structure above is the recommendation, not a rigid rule.
+The old shape (`bool passed`, `std::vector<std::string> data` or `std::map<std::string,std::string> data`, `duration<double>`) is gone. The Client App previously bridged the old shape to proto. It must now bridge the new shape.
+
+The mirroring proto types under `hal.common`:
+
+```proto
+enum TestStatus  { PASS, FAIL, ERROR, TIMEOUT, SKIPPED, ABORTED, … }   // exact values per protos/common.proto
+enum TestSeverity { INFO, WARNING, ERROR, CRITICAL, … }
+message TypedValue { oneof value { bool, int64, double, string } }
+message TestOutput { status, severity, reason, metrics, monitoring, event, error_message }
+message TestResult { module_id, test_id, name, sequence, timestamp, duration, output, subtests }
+```
+
+Read `protos/common.proto` for exact field names, tags, and the enum ordering. **Do not assume — read.**
+
+The Client App's role does not change. It still:
+- Receives commands from Server via the control channel
+- Drives the HAL in one of four modes (SINGLE_SHOT / LONG_TERM / MONITORING / EVENT_BASED)
+- Wraps each HAL `TestResult` into `ResultEnvelope` and streams to the Server
+- Buffers locally on disconnect, applies backpressure when full
+
+What changes is **the shape of the data flowing through every result-handling code path**.
 
 ---
 
-## Build Order (Recommended Across Sessions)
+## 2. Scope of this update
 
-Each item below is one focused session. Do not skip ahead.
+You will touch:
 
-1. **Skeleton + build system** — `CMakeLists.txt`, `main.cpp` that just logs "hello" and exits cleanly on `SIGTERM`, config parser stub. Compiles and runs on Linux.
-2. **Spool: schema + result_store** — open SQLite with WAL, create tables, insert a batch, query unacked, mark acked. Unit tests with a temp DB. Single-threaded for now.
-3. **Spool: single-writer thread + queue** — add the writer thread that serializes all writes. All other threads enqueue. Unit test concurrent enqueues.
-4. **Spool: janitor** — periodic deletion of acked rows older than 24h, plus disk-cap check. Unit test with manipulated timestamps.
-5. **Spool: log_store** — separate table, drop-oldest policy on full. Unit test.
-6. **gRPC stub server** — in-process server for testing the Client. Implements the bidi stream contract minimally: accepts a Client, accepts batches, sends ACKs, can be told to disconnect for tests.
-7. **gRPC stream_client + reconnect** — connect, send a single batch, receive an ACK, mark it in the spool. Then: kill the stub server, verify the Client buffers, restart the stub, verify catch-up. Unit + integration tests.
-8. **Run lifecycle: registry + state machine** — `ConfigureRun` → `ConfigureAck`, `StartRun` → driver starts, `StopRun` → driver stops cleanly. No HAL yet; driver is a fake that emits one sample per tick. Unit tests for the state machine, integration test for the full flow against the stub server.
-9. **HAL integration: Single Shot driver** — pick one HAL module (CPU is the canonical first module per project plan), wire `driver_single_shot.cpp` to call `module.single_shot(config)`, produce a batch with one sample, send. End-to-end smoke test on hardware (or with a mocked HAL on x86).
-10. **HAL integration: Long-Term driver** — implements the per-second batching loop. Driver tick called at HAL's configured rate, results accumulate, flushed at 1 Hz. End-to-end test.
-11. **HAL integration: Monitoring driver** — same as Long-Term plus monitoring params per sample.
-12. **HAL integration: Event-Based driver** — HAL callback fires only on condition; driver still ships a heartbeat batch each second (possibly empty).
-13. **Logs: log_collector + journald reader** — stream journald entries into log spool, batch and ship at 1 Hz, separate seq space. Unit test against a fake journald reader.
-14. **Logs: dmesg + file tailers** — read /dev/kmsg, tail extra paths configured in `client.conf`.
-15. **Spool-full backpressure end-to-end** — fill the spool, verify drivers pause, free space, verify resume. Integration test with a small cap.
-16. **Failure-mode integration tests** — kill the network mid-run, kill the server, kill the Client (SIGKILL), full disk, malformed config, unknown module. Each scenario has a documented expected outcome and an automated test where feasible.
-17. **Diagnostic socket + metrics** — `dump-state` Unix socket, optional Prometheus exposition.
-18. **Yocto recipe hooks** — produce the artifacts the OS recipe needs: binary, default config, systemd unit file template. (The recipe itself lives in Acadia-OS.)
+1. **HAL bridge / serializer** — the code that converts `hal::TestResult` ↔ proto `hal.common.TestResult`. Full rewrite of the conversion logic.
+2. **Module adapters** — per-module adapters under `client/src/registry/adapters/`. Each adapter must now produce the new `hal::TestResult` shape and pass it through the updated serializer.
+3. **Runner integration** — the runner stamps `sequence` and `timestamp` (the HAL produces everything else). Verify and enforce that responsibility split.
+4. **Result streamer** — wraps `hal::TestResult` into `ResultEnvelope` for transport. Update to use the new proto fields.
+5. **Local buffering** — if results are buffered in memory (or to disk for overflow), the on-wire / on-disk format must match the new proto. Migrate buffer code; if there's any persistence format, version it.
+6. **Backpressure path** — unchanged behavior, but verify it still applies cleanly under the new types.
+7. **Tests** — every unit test, every integration test, every fake module / fixture that produces or asserts on results.
+8. **Logs** — any log lines that include result fields (`passed`, `data`, etc.) must use the new fields.
 
-After step 18, the Client is feature-complete for v1 with one HAL module wired. Adding more modules is mostly:
-
-- Add the per-module config validator
-- Verify the four mode drivers handle the module's config/result types (they should be generic over the proto `oneof`)
-- Smoke test
-- Document any module-specific quirks
+You will **not** touch:
+- The HAL itself (already done).
+- The protos (already done).
+- The Server App (separate prompt).
+- The Web UI (separate prompt).
 
 ---
 
-## Do's
+## 3. Architectural rules — unchanged but reaffirmed
 
-- **Do scope each session to one or two adjacent items from the build order.** Do not generate 5000 lines in one response.
-- **Do produce code that compiles.** If you can't be sure, say so and ask for the relevant header (HAL public headers, proto-generated headers).
-- **Do write the tests in the same session as the code.** Untested spool or stream logic is worse than no code at all — you'll trust it and it'll bite.
-- **Do follow the locked architecture.** When in doubt, search this prompt before deviating.
-- **Do RAII everything.** File descriptors, SQLite connections, gRPC channels, pipes. Use `std::unique_ptr` with custom deleters or write small RAII wrappers.
-- **Do use `std::optional` and `std::variant` over sentinels and unions.** C++17 makes this clean.
-- **Do propagate errors as values** (a `Result<T>` type, `std::expected` shim, or status + value pair) rather than exceptions for expected failure paths. Exceptions are fine for programmer errors and resource exhaustion only.
-- **Do make modules testable.** Take dependencies as parameters (constructor injection), not by reaching into globals. The grpc client takes a channel factory; the spool takes a DB path; drivers take a HAL module reference.
-- **Do log state transitions at INFO.** "Run abc-123 transitioning Configuring→Ready" is the kind of thing you'll thank yourself for at 2 AM.
-- **Do treat the spool and reconnect logic as load-bearing.** Spend time on them. Write more tests than you think you need. The whole Client's value is "data doesn't disappear."
-- **Do ask before adding dependencies.** "I want to use Abseil for `StatusOr` — okay?" not "here is your project, now with Abseil baked in."
-- **Do propose option-based clarifying questions** when ambiguous.
-- **Do produce a "what to test next" note at the end of each code response.** What does Sandesh run to verify the work?
+These are load-bearing from the original Client design. The refactor does not relax any of them.
+
+- **Registry-driven dispatch.** No `switch(module_id)` outside the `AdapterRegistry`. Adapters self-register; the refactor does not introduce dispatch shortcuts.
+- **HAL is the only owner of result content.** The runner stamps `sequence` and `timestamp`. The Client never invents `metrics`, `monitoring`, or `event` data — it only forwards what the HAL produced.
+- **Backpressure over drop.** Bounded queues. If the Server is unreachable and buffers fill, slow the HAL workers — never silently discard results.
+- **gRPC I/O thread does no HAL work.** HAL execution always on workers; I/O thread only manages streams.
+- **Adapter as the only HAL-aware code.** The serializer is generic over `hal::TestResult`; adapters do not implement their own serializers.
+
+If the refactor tempts you to break any of these (e.g., "the new `metrics` map is awkward, let me add a quick switch in the streamer"), stop and reconsider.
 
 ---
 
-## Don'ts
+## 4. Required code changes — concrete
 
-- **Don't try to build the whole Client in one response.** Refuse politely and propose a scoped subset.
-- **Don't invent APIs.** If unsure about gRPC C++, libsystemd journal, or SQLite C API specifics, say so. Better to ask than to compile-fail.
-- **Don't add features not in the spec.** No metrics dashboard, no auth, no Kubernetes hooks, no HTTP server, no protocol versioning negotiation beyond what's listed.
-- **Don't put threading inside the HAL or alter HAL.** HAL is a library; the Client owns threads.
-- **Don't ACK before persisting.** When the Client receives a server ACK, the spool update is the consequence — but for client→server: don't tell the server "got it" until it's durably written. This is mostly server-side; mention it if relevant.
-- **Don't `printf`/`std::cout`.** Use spdlog.
-- **Don't allow the Client to exit on a single HAL error.** A buggy module fails its run; the Client keeps serving other runs.
-- **Don't allow the Client to exit on a server disconnect.** It buffers and reconnects.
-- **Don't use `system()`, `popen()`, or shell-outs** for journald, dmesg, or anything else. Use proper APIs.
-- **Don't write more than ~300 lines of new code in a single response.** If the task needs more, produce skeleton + critical functions, ask which part to flesh out next.
-- **Don't gold-plate.** No CRTP cleverness, no template metaprogramming, no header-only single-file gimmicks. Plain, readable C++17.
-- **Don't suppress warnings.** Fix the cause.
-- **Don't reach for global state.** No singletons, no global mutexes. Pass things in.
-- **Don't write blocking code on the gRPC main thread.** Hand work off to the spool writer or driver threads.
-- **Don't hold a lock across a gRPC call, an SQLite write, or a HAL invocation.** Each is a recipe for deadlock or hangs.
-- **Don't catch and swallow exceptions silently.** Catch, log with context, and either propagate or convert to a status.
+### 4.1 The serializer (`hal_bridge/ResultSerializer.h/.cc`)
+
+This is the single canonical conversion point between `hal::TestResult` and `hal.common.TestResult`. It must handle every status, every severity, every `Value` variant, and recursive subtests.
+
+```cpp
+namespace client::hal_bridge {
+
+// hal::Status -> hal.common.TestStatus
+hal::common::TestStatus to_proto(hal::Status s);
+hal::Status              from_proto(hal::common::TestStatus s);
+
+// hal::Severity -> hal.common.TestSeverity
+hal::common::TestSeverity to_proto(hal::Severity s);
+hal::Severity              from_proto(hal::common::TestSeverity s);
+
+// hal::Value -> hal.common.TypedValue
+hal::common::TypedValue to_proto(const hal::Value& v);
+hal::Value              from_proto(const hal::common::TypedValue& v);
+
+// std::chrono::system_clock::time_point -> google.protobuf.Timestamp
+google::protobuf::Timestamp to_proto(std::chrono::system_clock::time_point tp);
+std::chrono::system_clock::time_point from_proto(const google::protobuf::Timestamp& ts);
+
+// std::chrono::nanoseconds -> google.protobuf.Duration
+google::protobuf::Duration to_proto(std::chrono::nanoseconds d);
+std::chrono::nanoseconds   from_proto(const google::protobuf::Duration& d);
+
+// Maps. Free functions or inlined into to_proto(TestOutput).
+void copy_reason_to_proto(const std::map<std::string,std::string>& src,
+                          google::protobuf::Map<std::string, std::string>* dst);
+void copy_value_map_to_proto(const std::map<std::string, hal::Value>& src,
+                             google::protobuf::Map<std::string, hal::common::TypedValue>* dst);
+void copy_reason_from_proto(const google::protobuf::Map<std::string, std::string>& src,
+                            std::map<std::string,std::string>& dst);
+void copy_value_map_from_proto(const google::protobuf::Map<std::string, hal::common::TypedValue>& src,
+                               std::map<std::string, hal::Value>& dst);
+
+// Top-level.
+hal::common::TestOutput to_proto(const hal::TestOutput& out);
+hal::TestOutput          from_proto(const hal::common::TestOutput& out);
+
+hal::common::TestResult to_proto(const hal::TestResult& r);   // recursive subtests
+hal::TestResult          from_proto(const hal::common::TestResult& r);
+
+} // namespace
+```
+
+**Rules for the serializer:**
+
+- **Enum mapping is exhaustive.** Every `hal::Status` value has a proto counterpart. Use a `switch` with no default; let the compiler warn on missing cases. Same for `Severity`.
+- **`Value` variant uses `std::visit`** to set the proto `oneof`. On parse, switch on `TypedValue::value_case()`; on `VALUE_NOT_SET`, fall back to empty string and log a `[SERIALIZER-FALLBACK]` warning with the offending key.
+- **`UNSPECIFIED` proto values on inbound** convert to `Status::ERROR` with `error_message = "received unspecified status"`. Same for severity → `INFO`.
+- **Timestamp encoding** uses seconds + nanos split. Document UTC assumption.
+- **Duration encoding** uses seconds + nanos split. Negative durations forbidden; clamp to zero with a `[SERIALIZER-CLAMP]` log line.
+- **Recursive subtests** call `to_proto`/`from_proto` on the `TestResult` again. Watch stack depth — cap recursion at a configurable limit (default 32) and convert deeper trees to a single flattened error result.
+
+**Round-trip property test** is mandatory: for every `Status`, every `Severity`, every `Value` variant (bool, int64, double, string), with non-empty `reason`/`metrics`/`monitoring`/`event` maps and at least one subtest level, `from_proto(to_proto(x)) == x` must hold.
+
+### 4.2 The `ResultEnvelope` wrapper
+
+Find the code that wraps a `hal::TestResult` into the on-wire `ResultEnvelope` for streaming (likely in `grpc_client/ResultStreamer.cc`). Update it to:
+
+- Set `module_id` from `result.module_id` (no longer guessed at the streamer layer).
+- Set `test_id`, `name`, `sequence`, `timestamp`, `duration` directly from the serialized proto `TestResult`.
+- Carry the proto `TestResult` as the typed payload — either directly in `ResultEnvelope` if its schema embeds it, or via `google.protobuf.Any` if the existing envelope is `Any`-based.
+- Tag with `run_id` from the runner context.
+
+If the envelope contract changed in protos as part of the HAL refactor (it might have), follow what `hal_service.proto` and `common.proto` actually define. Do not assume the old shape.
+
+### 4.3 Module adapters
+
+Each adapter in `client/src/registry/adapters/<module>.cc` produces `hal::TestResult` instances by invoking the HAL and assembling output.
+
+For every adapter:
+
+1. Replace any old code that set `output.passed = true/false` with `output.status = hal::Status::PASS` (or appropriate non-PASS).
+2. Replace any old code that pushed strings into `output.data` with the correct destination — `reason`, `metrics`, `monitoring`, or `event` — per the same decomposition rule used in the HAL refactor:
+   - Numeric measurements → `metrics` as typed `Value`.
+   - Environmental samples (mode = MONITORING) → `monitoring`.
+   - Event-trigger payloads (mode = EVENT_BASED) → `event`.
+   - Free-form explanations → `reason`.
+3. Set `severity` deliberately. Defaults: `INFO` on PASS, `ERROR` on FAIL/ERROR, `WARNING` for soft failures the module classifies as such.
+4. Set `module_id` from the module's canonical identifier in `modules.yaml`. Stop relying on the streamer to inject it.
+5. Set `test_id` — stable across renames. If the module previously used `name` as identity, set `test_id == name` for now and add a code comment so this can be revisited per-module.
+6. Do **not** set `sequence` or `timestamp` inside the adapter — the runner stamps these. Leave them default-constructed.
+7. Populate `error_message` whenever the adapter catches an exception or detects a HAL precondition failure. Set `status = ERROR`.
+8. For HAL modules that emit hierarchical results (per-core, per-channel, per-pin), populate `subtests` with sub-`TestResult`s instead of stuffing keys like `core0.temp` into the parent. Subtests are first-class.
+
+If an adapter currently stringifies numeric values to fit the old `data: vector<string>` shape, restore the original numeric type into a `Value`. The Web UI's click-to-chart depends on numeric typing.
+
+### 4.4 The runner
+
+The runner owns `sequence` and `timestamp`. Verify the existing runner is the one and only place these are set:
+
+- **SINGLE_SHOT**: stamp `sequence = 0`, `timestamp = now()` immediately after the HAL returns.
+- **LONG_TERM / MONITORING / EVENT_BASED**: maintain a per-run, per-module monotonic `sequence` counter starting at 0. Stamp `timestamp = now()` when each result arrives from the HAL.
+- The runner must also catch HAL exceptions / timeouts / cancellation and synthesize a `TestResult` with the appropriate non-PASS `Status` and `error_message`. Adapters can also catch and surface, but the runner is the safety net.
+- **TIMEOUT** synthesis: when a worker exceeds its allotted duration, runner builds a `TestResult` with `status = TIMEOUT`, `error_message = "test exceeded N ms"`, and a partial `metrics` map if the HAL provided any pre-timeout data.
+- **ABORTED** synthesis: when stop/cancel is received mid-run, runner builds a final `TestResult` with `status = ABORTED`, `error_message = "cancelled by server"`.
+
+If `sequence`/`timestamp` are being set anywhere else (adapter, serializer, streamer), remove and consolidate to the runner.
+
+### 4.5 Buffering and persistence
+
+The local in-memory queue carries `ResultEnvelope` (or its predecessor, depending on what the queue type is). Verify:
+
+- Queue element type matches the new envelope shape.
+- Any disk-overflow path serializes the new proto. If the on-disk format is just `proto.SerializeToString()`, the change is transparent at the bytes level — but old buffered files written before the refactor are now incompatible. On startup, if the agent finds buffered overflow files in the old format, log a `[BUFFER-INCOMPATIBLE]` line and quarantine them (move to a `.legacy/` subdir, do not delete, do not attempt to send).
+- Size accounting (bytes per queued envelope) still works under the new shape, since the payload size is generally larger now (typed maps).
+
+### 4.6 Logs
+
+Search the Client App source for log lines referencing `passed`, `.data`, `output.passed`, `output.data`, etc. Replace each with the equivalent new field — `status`, `metrics`, `reason`, etc. — making sure the log line is still readable.
+
+### 4.7 Headers and includes
+
+Audit `#include` directives across the Client. If any TU still includes an old HAL types header that no longer exists, replace with the new canonical header path. Document the new include path in the Client README.
 
 ---
 
-## Quality Bar (Apply Before Sending Code)
+## 5. Tests — required coverage
 
-1. **Does it compile?** Type-check mentally. If unsure, say so.
-2. **Does it match the locked architecture?** Cross-reference this prompt.
-3. **Are the failure modes handled?** Disconnect, crash, full disk, malformed input, partial writes.
-4. **Is the wire protocol respected?** `run_id` on every message, `batch_seq` monotonic per run, dedup-safe.
-5. **Is it tested?** Code without tests is half-done.
-6. **Is it the minimum useful slice?** No premature abstraction.
-7. **Is the output reviewable?** Under ~300 lines, with a "what to test next" section.
+### 5.1 Serializer unit tests
+For every `Status`, every `Severity`, every `Value` variant, including:
+- Empty result (all maps empty, no subtests).
+- Populated maps in `reason`, `metrics`, `monitoring`, `event` simultaneously.
+- Subtests one level deep, two levels deep, and at the recursion cap (32 levels).
+- Pathological cases: very large maps (1k entries), large string values (1 MB), zero duration, far-future and far-past timestamps.
 
----
+Round-trip property: `from_proto(to_proto(x)) == x`.
 
-## Working Style Notes
+### 5.2 Adapter migration tests
+For each migrated adapter, at least one test that:
+- Drives the HAL (or `FakeModule`) through a known scenario.
+- Asserts on the new `TestResult` shape — `status`, specific keys in `metrics` or `reason` with their typed values, `module_id`, `test_id`.
+- Confirms no leftover use of `passed` / `data`.
 
-Sandesh's preferences:
+### 5.3 Runner integration tests
+- SINGLE_SHOT: sequence == 0, timestamp set, exactly one result.
+- LONG_TERM: monotonic sequence (0, 1, 2, …), timestamps monotonic-ish (allow tiny clock skew).
+- MONITORING: `output.monitoring` is non-empty when configured; the keys match what was requested.
+- EVENT_BASED: `output.event` is non-empty when triggered; sequences only increment on triggers (no events between).
+- TIMEOUT path: kill a worker that overruns, assert `status == TIMEOUT` and `error_message` is set.
+- ABORTED path: send cancel mid-run, assert final result has `status == ABORTED`.
 
-- Minimal chat formatting. Plain bullets. No headers in replies unless the response is a document deliverable.
-- Concise. Get to the point. Skip preamble.
-- Delegates execution. Once direction is agreed, complete the scoped task end-to-end, don't ping-pong for confirmation on every line.
-- Asks for option-based questions when refining design. Use option-based questions when ambiguity exists.
-- Welcomes pushback. If a request is wrong or over-scoped, say so.
-- No unsolicited analysis or commentary. Answer the question asked.
+### 5.4 End-to-end with mock server
+Wire the in-process mock gRPC server. Drive a fake module in each mode. Verify the Server-side receives results with all new fields populated correctly. Verify disconnect-with-buffered-replay still works under the new payload shape.
 
----
+### 5.5 Backward-compat smoke test (optional but recommended)
+If old buffered overflow files exist on the agent disk, restart the agent and verify they are quarantined to `.legacy/`, not sent, not lost.
 
-## Session Kickoff Template
+### 5.6 Grep verification
+After all changes, grep the Client source tree:
 
-Sandesh starts the session with something like:
+```
+grep -rn "\.passed\b" client/src/ client/tests/
+grep -rn "output\.data\b" client/src/ client/tests/
+grep -rn "duration<double>" client/src/ client/tests/
+```
 
-> "Work on Acadia-Client. Implement step 2: spool result_store with WAL and unit tests."
-
-You respond with:
-
-1. One-line confirmation of scope.
-2. Any locked-decision callouts that apply ("reminder: single-writer thread, but that's step 3 — this session is just the schema and synchronous insert/query").
-3. Any clarifying option-based question if ambiguous (e.g. "Use `sqlite3` C API directly or a thin C++ wrapper like SQLiteCpp? Recommend direct C API — fewer deps, well-understood.").
-4. The code, scoped tight, with tests.
-5. Build/test commands.
-6. "What to test next" — one or two follow-ups Sandesh can pick from.
-
----
-
-## Open Items to Revisit (Not Now)
-
-- TLS on the gRPC channel — v1 plaintext on lab subnet is acceptable. Add when leaving the lab.
-- Metrics exposition (Prometheus) — optional v1, valuable when fleet > 2 boards.
-- Config reload via SIGHUP vs restart-only — restart-only for v1.
-- Multi-client Client (one Client process driving multiple boards) — out of scope; one Client per board.
+Expect zero hits (except in legacy/quarantine handling code, which should be commented and clearly scoped).
 
 ---
 
-## Final Note
+## 6. Workflow — phases
 
-The Client is the load-bearing piece of the Acadia stack. The HAL touches hardware, the server stores data, the dashboard shows it — but the Client is what stands between a hardware test in progress and a usable result in a database. If the Client loses data, the whole tool is a toy. If the Client crashes the run, the whole tool is unreliable. If the Client is hard to debug at 2 AM in the lab, the whole tool is a maintenance burden.
+Long-running task. No human gates. Write each phase report under `client_update/`.
 
-Build it boring. Build it observable. Build it durable. Test it like it's going to fail.
+### Phase 1 — Discovery
+1. Confirm the HAL refactor is in place: read the HAL types header and `protos/common.proto`. If they don't match Section 1, **stop** and report — the Client cannot be updated against a stale HAL.
+2. Find every Client file that references the old result types or fields (`passed`, `data` on `TestOutput`, `duration<double>` on `TestResult`). List them all.
+3. List every adapter under `client/src/registry/adapters/`. Cross-check against `modules.yaml` — flag any mismatch.
+4. List the serializer file(s), the streamer, the runner, the buffering code, the test files.
+5. Identify any code that owns `sequence` or `timestamp` today (it should be the runner only).
+
+Write `client_update/01_discovery.md`.
+
+### Phase 2 — Plan
+For each file from Phase 1, a concrete edit plan in dependency order: types/serializer first, then runner, then adapters, then streamer/buffering, then tests, then logs.
+
+Write `client_update/02_plan.md`.
+
+### Phase 3 — Serializer rewrite
+1. Implement / replace `ResultSerializer` per Section 4.1.
+2. Write the round-trip property tests per Section 5.1.
+3. Run serializer tests until green.
+
+Write `client_update/03_serializer.md`.
+
+### Phase 4 — Runner updates
+1. Verify and enforce that `sequence` and `timestamp` are stamped only in the runner.
+2. Add TIMEOUT, ABORTED, ERROR synthesis paths.
+3. Add tests per Section 5.3.
+
+Write `client_update/04_runner.md`.
+
+### Phase 5 — Per-adapter migration
+For each adapter (in alphabetical order of `module_id`):
+1. Update per Section 4.3.
+2. Add adapter test per Section 5.2.
+3. Compile and run the adapter's tests. Fix breakage. Move on only when green.
+4. Append a per-adapter entry to `client_update/05_adapters/<module_id>.md`.
+
+### Phase 6 — Streamer and buffering
+1. Update envelope wrapping per Section 4.2.
+2. Update buffering type plumbing per Section 4.5.
+3. Implement legacy-buffer quarantine.
+4. Add the optional backward-compat smoke test if disk overflow is enabled.
+
+Write `client_update/06_streaming.md`.
+
+### Phase 7 — Logs and includes audit
+1. Replace stale log lines (Section 4.6).
+2. Replace stale includes (Section 4.7).
+3. Run the grep verification (Section 5.6). Expect zero hits.
+
+Write `client_update/07_audit.md`.
+
+### Phase 8 — Full verification
+1. Build the Client clean for host and at least one cross-compile preset (ARM64).
+2. Run all unit + integration tests. All green.
+3. Run end-to-end against the mock server (Section 5.4).
+4. Run for 5+ minutes in LONG_TERM mode with a fake module, with simulated disconnect at minute 2 and reconnect at minute 3 — verify no data loss, sequences contiguous after replay.
+5. Verify resource footprint hasn't regressed materially (steady-state RSS, CPU). Document numbers.
+
+Write `client_update/08_verification.md` with evidence (build logs, test summary, footprint numbers, disconnect-test sequence audit).
+
+### Phase 9 — Final report
+Summarize all changes: serializer, runner, adapters (table), streamer, buffering, tests added, logs/includes updated, footprint before/after, grep result, any ambiguities resolved.
+
+Write `client_update/09_final_report.md`.
+
+---
+
+## 7. Hard rules
+
+- **The new types from Section 1 are the spec.** No additions, no omissions.
+- **The proto definitions in `protos/common.proto` win.** If anything in this prompt contradicts what's actually in the protos, the protos are correct — stop and reconcile.
+- **No `switch(module_id)`** introduced anywhere as a side effect of this refactor. Adapter registry remains the only dispatch.
+- **`sequence` and `timestamp` belong to the runner.** No adapter, no serializer, no streamer sets them.
+- **No silent data loss.** Old `data` keys flow into one of `reason`/`metrics`/`monitoring`/`event`. If the destination is ambiguous, log `[MIGRATION-AMBIGUOUS]` with file, key, and chosen destination — record in the audit.
+- **`passed` and the old `data` field must not survive anywhere in active code paths.** Grep verifies. Legacy-quarantine handling is the only exception, and it must be commented as such.
+- **Numeric values stay numeric.** Adapters that previously stringified numbers must restore the typed value. The UI's click-to-chart depends on this.
+- **The HAL is not modified.** If the new HAL types appear to require a HAL change, stop and raise it — do not patch the HAL from inside the Client refactor.
+- **The protos are not modified.** Same rule.
+- **No new heavyweight dependencies.** This still runs on a Pi.
+- **All long-running threads remain cooperatively cancellable.** Do not introduce detached threads while refactoring.
+- **Backpressure semantics are preserved.** The new larger payloads must not silently cause queue size accounting to undercount.
+
+---
+
+## 8. Deliverables
+
+At completion of Phase 9:
+- Client App building clean for host and ARM cross.
+- All unit + integration tests green.
+- Serializer with round-trip property tests covering every `Status`, every `Severity`, every `Value` variant, including subtests.
+- All adapters migrated and tested.
+- Runner stamps `sequence`/`timestamp` exclusively; TIMEOUT/ABORTED/ERROR synthesis paths covered.
+- Streamer and buffering using the new envelope; legacy-buffer quarantine in place.
+- Logs and includes cleaned; grep for `passed` / `output.data` / `duration<double>` returns zero hits in active code.
+- All phase reports under `client_update/01_…` through `client_update/09_final_report.md`.
+- End-to-end disconnect-replay scenario captured as evidence.
+
+Begin with Phase 1.

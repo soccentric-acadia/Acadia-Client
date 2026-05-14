@@ -106,14 +106,35 @@ public:
     };
     std::vector<RunStateRow> all_run_states() const;
 
+    // ----------------------------------------------------------------
+    // Schema versioning + legacy quarantine
+    // ----------------------------------------------------------------
+
+    // Current schema version.  Increment when the payload format changes
+    // incompatibly (e.g. the HAL refactor that replaced passed/data with
+    // the new TestResult shape).
+    static constexpr int kCurrentSchemaVersion = 2;
+
+    // Returns the schema version stored in the database, or 0 if absent.
+    int stored_schema_version() const;
+
+    // If the stored version < kCurrentSchemaVersion, moves the existing
+    // database file to <path>.legacy/<timestamp>.db, logs
+    // [BUFFER-INCOMPATIBLE], and returns true.  The caller should then
+    // re-open a fresh Spool at the original path.
+    // This is called automatically by the constructor.
+    static bool quarantine_if_legacy(const std::string& path);
+
 private:
     sqlite3*         db_         = nullptr;
     mutable std::mutex mtx_;
     uint64_t         result_cap_;
     uint64_t         log_cap_;
+    std::string      path_;  // stored for quarantine reporting
 
     void exec(const char* sql);
     void apply_schema();
+    void write_schema_version(int version);
 };
 
 } // namespace acadia::client

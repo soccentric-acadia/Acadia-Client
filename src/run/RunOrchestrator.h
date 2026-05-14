@@ -6,17 +6,29 @@
 // thread.  All runs multiplex through the StreamClient.
 //
 // Thread safety: all public methods are thread-safe.
+//
+// Architectural rules (Section 4.4 of req.md):
+//  - `sequence` and `timestamp` are stamped HERE and nowhere else.
+//  - HAL exceptions / timeouts / cancellation are caught here and synthesized
+//    into TestResult with ERROR / TIMEOUT / ABORTED status.
+//  - HalInvokeFn returns std::vector<hal::TestResult>; adapters set all
+//    content fields; runner stamps sequence and timestamp.
 
 #include "spool/Spool.h"
 #include "stream/StreamClient.h"
 
+// lib_base.h brings in hal::TestResult, hal::Status, etc.
+#include "lib_base.h"
+
 #include <atomic>
+#include <chrono>
 #include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <vector>
 
 namespace acadia::stream {
     class ConfigureRun;
@@ -25,13 +37,13 @@ namespace acadia::stream {
 
 namespace acadia::client {
 
-// Opaque HAL invocation callback — in production, wired to the HAL library.
-// Signature: (module_id, mode, config_bytes) → result_bytes.
-// Returning empty bytes signals HAL error.
+// HAL invocation callback.
+// Returns one or more TestResult objects per call (one call == one tick).
+// Implementations MUST NOT set sequence or timestamp; the runner stamps them.
 using HalInvokeFn = std::function<
-    std::vector<uint8_t>(const std::string& module_id,
-                          int mode,
-                          const std::vector<uint8_t>& config_bytes)>;
+    std::vector<hal::TestResult>(const std::string& module_id,
+                                  int mode,
+                                  const std::vector<uint8_t>& config_bytes)>;
 
 struct RunContext {
     std::string              run_id;
@@ -42,6 +54,7 @@ struct RunContext {
     std::atomic<bool>        stop{false};
     int64_t                  batch_seq   = 0;
     std::string              type_url;         // result type URL
+    uint64_t                 next_sequence = 0; // monotonic per-run counter (stamped by runner)
 };
 
 class RunOrchestrator {
@@ -77,9 +90,16 @@ private:
     void run_monitoring(RunContext& ctx);
     void run_event_based(RunContext& ctx);
 
-    void flush_batch(RunContext& ctx,
-                     const std::vector<uint8_t>& sample_payload,
-                     bool terminal);
+    // Stamp sequence and timestamp on each result, then flush to spool/stream.
+    void flush_results(RunContext& ctx,
+                       std::vector<hal::TestResult> results,
+                       bool terminal);
+
+    // Synthesize a special-status result (TIMEOUT, ABORTED, ERROR) and flush.
+    void flush_synthetic(RunContext& ctx,
+                         hal::Status status,
+                         const std::string& error_message,
+                         bool terminal);
 
     Spool&          spool_;
     StreamClient&   stream_;

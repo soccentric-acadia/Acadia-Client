@@ -5,20 +5,37 @@
 #include <spdlog/spdlog.h>
 
 #include "client_service.pb.h"
+#include "registry/AdapterRegistry.h"
+#include "registry/adapters/cpu_adapter.h"
+#include "registry/adapters/thermal_adapter.h"
+#include "registry/adapters/system_memory_adapter.h"
+#include "registry/adapters/stub_adapter.h"
 
 using namespace acadia::stream;
 
 namespace acadia::client {
 
 // ---------------------------------------------------------------------------
-// HAL invocation stub — replaced with real HAL calls when linking against
-// the Acadia-HAL library in the Yocto build.
+// build_adapter_registry — registers all known module adapters.
+// Adapters self-register here; no switch(module_id) anywhere else.
 // ---------------------------------------------------------------------------
-static std::vector<uint8_t> hal_invoke_stub(const std::string& module_id,
-                                              int /*mode*/,
-                                              const std::vector<uint8_t>& /*cfg*/) {
-    spdlog::debug("hal_stub: module_id={}", module_id);
-    return {}; // Empty result until HAL library is linked
+static std::unique_ptr<AdapterRegistry> build_adapter_registry(
+    const std::vector<ModuleEntry>& all_modules)
+{
+    auto reg = std::make_unique<AdapterRegistry>();
+
+    // Real adapters — add one per implemented module.
+    reg->register_adapter(std::make_unique<CpuAdapter>());
+    reg->register_adapter(std::make_unique<ThermalAdapter>());
+    reg->register_adapter(std::make_unique<SystemMemoryAdapter>());
+
+    // Stub adapters for all modules not yet implemented.
+    for (const auto& m : all_modules) {
+        if (!reg->has_adapter(m.id)) {
+            reg->register_adapter(std::make_unique<StubAdapter>(m.id));
+        }
+    }
+    return reg;
 }
 
 // ---------------------------------------------------------------------------
@@ -69,9 +86,18 @@ bool App::init() {
     stream_ = std::make_unique<StreamClient>(scfg,
         [this](const ServerMessage& msg){ on_server_message(msg); });
 
-    // 4. Run orchestrator
+    // 4. Run orchestrator — wired to the adapter registry.
+    auto adapter_registry = build_adapter_registry(registry_->all());
+    // Capture by shared ownership so the lambda outlives this scope.
+    auto shared_registry = std::shared_ptr<AdapterRegistry>(std::move(adapter_registry));
+    HalInvokeFn hal_fn = [shared_registry](const std::string& module_id,
+                                            int mode,
+                                            const std::vector<uint8_t>& cfg)
+                                            -> std::vector<hal::TestResult> {
+        return shared_registry->invoke(module_id, mode, cfg);
+    };
     orchestrator_ = std::make_unique<RunOrchestrator>(
-        *spool_, *stream_, hal_invoke_stub);
+        *spool_, *stream_, std::move(hal_fn));
 
     // 5. Log collector
     LogCollectorConfig lccfg;

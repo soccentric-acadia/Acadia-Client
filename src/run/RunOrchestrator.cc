@@ -1,5 +1,6 @@
 #include "run/RunOrchestrator.h"
 
+#include "hal_bridge/ResultSerializer.h"
 #include "client_service.pb.h"
 
 #include <spdlog/spdlog.h>
@@ -141,12 +142,21 @@ void RunOrchestrator::driver_thread(std::shared_ptr<RunContext> ctx) {
 }
 
 // ---------------------------------------------------------------------------
-// Flush one batch to spool + stream
+// Flush results — stamp sequence + timestamp, serialize, spool, stream
 // ---------------------------------------------------------------------------
 
-void RunOrchestrator::flush_batch(RunContext& ctx,
-                                   const std::vector<uint8_t>& sample_payload,
-                                   bool terminal) {
+void RunOrchestrator::flush_results(RunContext& ctx,
+                                     std::vector<hal::TestResult> results,
+                                     bool terminal) {
+    using clock = std::chrono::system_clock;
+
+    // Stamp sequence and timestamp on every result (spec: runner is the only
+    // place that sets these).
+    for (auto& r : results) {
+        r.sequence  = ctx.next_sequence++;
+        r.timestamp = clock::now();
+    }
+
     // Build TestResultBatch protobuf.
     TestResultBatch batch;
     batch.set_run_id(ctx.run_id);
@@ -156,27 +166,61 @@ void RunOrchestrator::flush_batch(RunContext& ctx,
     batch.set_state(terminal ? RunState::COMPLETED : RunState::RUNNING);
     batch.set_terminal(terminal);
 
-    if (!sample_payload.empty()) {
-        auto* s = batch.add_samples();
-        auto* payload = s->mutable_payload();
-        payload->set_type_url(ctx.type_url);
-        payload->set_value(sample_payload.data(), sample_payload.size());
-        s->set_status(hal::common::PASS);
+    for (const auto& r : results) {
+        auto* sample = batch.add_samples();
+        *sample->mutable_timestamp() = client::hal_bridge::to_proto(r.timestamp);
+        sample->set_status(client::hal_bridge::to_proto(r.output.status));
+        if (!r.output.error_message.empty())
+            sample->set_error(r.output.error_message);
+        // Pack the full TestResult into the Any payload.
+        hal::common::TestResult proto_result = client::hal_bridge::to_proto(r);
+        sample->mutable_payload()->PackFrom(proto_result);
+        sample->set_type_url("type.googleapis.com/hal.common.TestResult");
     }
 
-    // Serialize
+    // Empty terminal batch (e.g. ABORTED with no results from HAL).
+    if (results.empty() && terminal) {
+        // Nothing to add — the batch itself signals terminal.
+    }
+
+    // Serialize.
     Bytes bytes(batch.ByteSizeLong());
     batch.SerializeToArray(bytes.data(), static_cast<int>(bytes.size()));
 
-    // Spool (durability) — always write even when backpressure blocks stream
+    // Backpressure: block if spool is full (never silently drop).
+    while (spool_.result_spool_full() && !ctx.stop.load()) {
+        spdlog::warn("orchestrator: spool full — applying backpressure for run_id={}",
+                     ctx.run_id);
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    }
+
     spool_.insert_batch(ctx.run_id, ctx.batch_seq, bytes);
     spool_.upsert_run_state(ctx.run_id, static_cast<int>(RunState::RUNNING),
                              ctx.batch_seq);
 
-    // Send live on stream if connected
     ClientMessage msg;
     *msg.mutable_result_batch() = std::move(batch);
     stream_.send(std::move(msg));
+}
+
+void RunOrchestrator::flush_synthetic(RunContext& ctx,
+                                       hal::Status status,
+                                       const std::string& error_message,
+                                       bool terminal) {
+    hal::TestResult r;
+    r.module_id           = ctx.module_id;
+    r.test_id             = ctx.module_id;
+    r.name                = ctx.module_id;
+    r.output.status       = status;
+    r.output.error_message = error_message;
+    using sev = hal::Severity;
+    switch (status) {
+        case hal::Status::TIMEOUT: r.output.severity = sev::ERROR;    break;
+        case hal::Status::ABORTED: r.output.severity = sev::WARNING;  break;
+        case hal::Status::ERROR:   r.output.severity = sev::ERROR;    break;
+        default:                   r.output.severity = sev::INFO;     break;
+    }
+    flush_results(ctx, {std::move(r)}, terminal);
 }
 
 // ---------------------------------------------------------------------------
@@ -187,8 +231,21 @@ void RunOrchestrator::run_single_shot(RunContext& ctx) {
     spdlog::info("orchestrator: single-shot run_id={} module={}",
                  ctx.run_id, ctx.module_id);
 
-    auto result = hal_fn_(ctx.module_id, ctx.mode, ctx.config_blob);
-    flush_batch(ctx, result, true);
+    // SINGLE_SHOT: sequence = 0, timestamp = now() after HAL returns.
+    try {
+        auto results = hal_fn_(ctx.module_id, ctx.mode, ctx.config_blob);
+        if (results.empty()) {
+            flush_synthetic(ctx, hal::Status::ERROR,
+                            "HAL returned empty results for single-shot", true);
+        } else {
+            flush_results(ctx, std::move(results), true);
+        }
+    } catch (const std::exception& e) {
+        spdlog::error("orchestrator: single-shot HAL exception run_id={}: {}",
+                      ctx.run_id, e.what());
+        flush_synthetic(ctx, hal::Status::ERROR,
+                        std::string("HAL exception: ") + e.what(), true);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -203,7 +260,7 @@ void RunOrchestrator::run_long_term(RunContext& ctx) {
     auto next_tick = clock::now() + std::chrono::seconds(1);
 
     while (!ctx.stop.load()) {
-        // Backpressure: if spool is full, pause HAL
+        // Backpressure: block if spool is full
         while (spool_.result_spool_full() && !ctx.stop.load()) {
             spdlog::warn("orchestrator: spool full, pausing run_id={}", ctx.run_id);
             std::this_thread::sleep_for(std::chrono::milliseconds(200));
@@ -214,26 +271,34 @@ void RunOrchestrator::run_long_term(RunContext& ctx) {
 
         if (ctx.stop.load()) break;
 
-        auto result = hal_fn_(ctx.module_id, ctx.mode, ctx.config_blob);
-        flush_batch(ctx, result, false);
+        try {
+            auto results = hal_fn_(ctx.module_id, ctx.mode, ctx.config_blob);
+            flush_results(ctx, std::move(results), false);
+        } catch (const std::exception& e) {
+            spdlog::error("orchestrator: long-term HAL exception run_id={}: {}",
+                          ctx.run_id, e.what());
+            flush_synthetic(ctx, hal::Status::ERROR,
+                            std::string("HAL exception: ") + e.what(), false);
+        }
 
         // Sleep until next 1 Hz tick
         std::this_thread::sleep_until(next_tick);
         next_tick += std::chrono::seconds(1);
     }
 
-    flush_batch(ctx, {}, true);
+    // Terminal batch: ABORTED if stop was requested mid-run.
+    flush_synthetic(ctx, hal::Status::ABORTED, "cancelled by server", true);
 }
 
 // ---------------------------------------------------------------------------
-// Monitoring (T041) — same as long-term but mode=MONITORING
+// Monitoring (T041) — same loop as long-term; HAL enriches monitoring map
 // ---------------------------------------------------------------------------
 
 void RunOrchestrator::run_monitoring(RunContext& ctx) {
     spdlog::info("orchestrator: monitoring run_id={} module={}",
                  ctx.run_id, ctx.module_id);
-    // Monitoring mode: identical loop to long-term; the HAL itself
-    // enriches the result with monitoring params.
+    // Monitoring mode is identical to long-term from the runner's perspective;
+    // the HAL adapter populates output.monitoring for MONITORING mode results.
     run_long_term(ctx);
 }
 
@@ -254,24 +319,30 @@ void RunOrchestrator::run_event_based(RunContext& ctx) {
 
         if (ctx.stop.load()) break;
 
-        // HAL returns non-empty bytes only when the condition fires.
-        auto result = hal_fn_(ctx.module_id, ctx.mode, ctx.config_blob);
+        try {
+            // HAL returns non-empty results only when the condition fires.
+            auto results = hal_fn_(ctx.module_id, ctx.mode, ctx.config_blob);
 
-        auto now = clock::now();
-        if (!result.empty()) {
-            // Condition fired — send result immediately
-            flush_batch(ctx, result, false);
-            next_keepalive = now + std::chrono::seconds(1);
-        } else if (now >= next_keepalive) {
-            // Keepalive — empty batch to signal we're alive
-            flush_batch(ctx, {}, false);
-            next_keepalive = now + std::chrono::seconds(1);
+            auto now = clock::now();
+            if (!results.empty()) {
+                flush_results(ctx, std::move(results), false);
+                next_keepalive = now + std::chrono::seconds(1);
+            } else if (now >= next_keepalive) {
+                // Keepalive: empty terminal=false batch to signal liveness.
+                flush_results(ctx, {}, false);
+                next_keepalive = now + std::chrono::seconds(1);
+            }
+        } catch (const std::exception& e) {
+            spdlog::error("orchestrator: event-based HAL exception run_id={}: {}",
+                          ctx.run_id, e.what());
+            flush_synthetic(ctx, hal::Status::ERROR,
+                            std::string("HAL exception: ") + e.what(), false);
         }
 
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
 
-    flush_batch(ctx, {}, true);
+    flush_synthetic(ctx, hal::Status::ABORTED, "cancelled by server", true);
 }
 
 } // namespace acadia::client
