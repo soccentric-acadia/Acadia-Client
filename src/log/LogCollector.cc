@@ -4,6 +4,7 @@
 
 #include <spdlog/spdlog.h>
 
+#include <fcntl.h>
 #include <chrono>
 #include <cstdio>
 #include <cstring>

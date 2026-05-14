@@ -16,6 +16,7 @@
 
 #include "spool/Spool.h"
 #include "stream/StreamClient.h"
+#include "client_service.pb.h"
 
 // lib_base.h brings in hal::TestResult, hal::Status, etc.
 #include "lib_base.h"
@@ -31,7 +32,6 @@
 #include <vector>
 
 namespace acadia::stream {
-    class ConfigureRun;
     class TestResultBatch;
 }
 

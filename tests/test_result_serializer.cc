@@ -32,7 +32,7 @@ hal::TestResult make_result(hal::Status status = hal::Status::PASS,
     r.name      = "Test Name";
     r.sequence  = 42;
     r.timestamp = std::chrono::system_clock::time_point(
-        std::chrono::seconds(1_000_000_000LL));  // ~2001-09-09
+        std::chrono::seconds(1'000'000'000LL));  // ~2001-09-09
     r.duration  = std::chrono::nanoseconds(500'000'000);  // 0.5 s
     r.output.status   = status;
     r.output.severity = sev;

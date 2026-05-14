@@ -153,7 +153,7 @@ target_link_libraries(acadia-client PRIVATE
   tomlplusplus::tomlplusplus
   yaml-cpp::yaml-cpp
   SQLite::SQLite3
-  gRPC::grpc++
+  ${ACADIA_GRPC_LIBRARIES}
   protobuf::libprotobuf
 )
 
@@ -222,7 +222,7 @@ if(BUILD_TESTS)
     spdlog::spdlog
     SQLite::SQLite3
     yaml-cpp::yaml-cpp
-    gRPC::grpc++
+    ${ACADIA_GRPC_LIBRARIES}
     protobuf::libprotobuf
     GTest::gtest_main
   )
