@@ -17,6 +17,8 @@ RUN apt-get update && apt-get install -y \
     libgrpc++-dev \
     libgrpc-dev \
     libsqlite3-dev \
+    libspdlog-dev \
+    libgtest-dev \
     binutils \
     pkg-config \
     ninja-build \
@@ -25,6 +27,24 @@ RUN apt-get update && apt-get install -y \
     libboost-system-dev \
     libboost-date-time-dev \
     && rm -rf /var/lib/apt/lists/*
+
+# toml++ is not packaged for Ubuntu 22.04 ARM64 — install header-only lib from source
+RUN git clone --depth=1 --branch v3.4.0 https://github.com/marzer/tomlplusplus.git /tmp/tomlplusplus \
+    && cmake -S /tmp/tomlplusplus -B /tmp/tomlplusplus/build \
+        -DCMAKE_INSTALL_PREFIX=/usr \
+        -DCMAKE_INSTALL_LIBDIR=lib \
+    && cmake --install /tmp/tomlplusplus/build \
+    && rm -rf /tmp/tomlplusplus
+
+# yaml-cpp 0.7.x (Ubuntu 22.04) lacks the yaml-cpp::yaml-cpp imported target; build 0.8.0
+RUN git clone --depth=1 --branch 0.8.0 https://github.com/jbeder/yaml-cpp.git /tmp/yaml-cpp \
+    && cmake -S /tmp/yaml-cpp -B /tmp/yaml-cpp/build \
+        -DCMAKE_INSTALL_PREFIX=/usr \
+        -DCMAKE_INSTALL_LIBDIR=lib \
+        -DYAML_CPP_BUILD_TESTS=OFF \
+    && cmake --build /tmp/yaml-cpp/build --parallel \
+    && cmake --install /tmp/yaml-cpp/build \
+    && rm -rf /tmp/yaml-cpp
 
 # Build grpc_cpp_plugin from source files.
 # The plugin only needs libprotoc (already installed above).

@@ -6,7 +6,6 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 include(cmake/CompilerWarnings.cmake)
-include(FetchContent)
 include(GNUInstallDirs)
 
 # ---------------------------------------------------------------------------
@@ -14,41 +13,13 @@ include(GNUInstallDirs)
 # ---------------------------------------------------------------------------
 
 # spdlog
-find_package(spdlog QUIET)
-if(NOT spdlog_FOUND)
-  FetchContent_Declare(
-    spdlog
-    GIT_REPOSITORY https://github.com/gabime/spdlog.git
-    GIT_TAG        v1.14.1
-    GIT_SHALLOW    TRUE
-  )
-  FetchContent_MakeAvailable(spdlog)
-endif()
+find_package(spdlog REQUIRED)
 
 # toml++ (config file parsing)
-find_package(tomlplusplus QUIET)
-if(NOT tomlplusplus_FOUND)
-  FetchContent_Declare(
-    tomlplusplus
-    GIT_REPOSITORY https://github.com/marzer/tomlplusplus.git
-    GIT_TAG        v3.4.0
-    GIT_SHALLOW    TRUE
-  )
-  FetchContent_MakeAvailable(tomlplusplus)
-endif()
+find_package(tomlplusplus REQUIRED)
 
 # yaml-cpp (modules.yaml registry)
-find_package(yaml-cpp QUIET)
-if(NOT yaml-cpp_FOUND)
-  FetchContent_Declare(
-    yaml_cpp
-    GIT_REPOSITORY https://github.com/jbeder/yaml-cpp.git
-    GIT_TAG        0.8.0
-    GIT_SHALLOW    TRUE
-  )
-  set(YAML_CPP_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-  FetchContent_MakeAvailable(yaml_cpp)
-endif()
+find_package(yaml-cpp REQUIRED)
 
 # SQLite3
 find_package(SQLite3 REQUIRED)
