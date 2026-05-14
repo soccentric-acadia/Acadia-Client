@@ -61,8 +61,6 @@ void RunOrchestrator::on_start(const std::string& run_id) {
     ctx->type_url  = ""; // set per-module when known
 
     // Serialize module_config Any bytes for HAL invocation.
-    cfg.module_config().SerializeToString(
-        reinterpret_cast<std::string*>(nullptr)); // no-op placeholder
     ctx->config_blob.resize(cfg.module_config().ByteSizeLong());
     cfg.module_config().SerializeToArray(
         ctx->config_blob.data(),
@@ -162,18 +160,18 @@ void RunOrchestrator::flush_results(RunContext& ctx,
     batch.set_run_id(ctx.run_id);
     batch.set_batch_seq(++ctx.batch_seq);
     batch.set_module_id(ctx.module_id);
-    batch.set_mode(static_cast<ExecutionMode>(ctx.mode));
+    batch.set_mode(static_cast<hal::common::ExecutionMode>(ctx.mode));
     batch.set_state(terminal ? RunState::COMPLETED : RunState::RUNNING);
     batch.set_terminal(terminal);
 
     for (const auto& r : results) {
         auto* sample = batch.add_samples();
-        *sample->mutable_timestamp() = client::hal_bridge::to_proto(r.timestamp);
-        sample->set_status(client::hal_bridge::to_proto(r.output.status));
+        *sample->mutable_timestamp() = hal_bridge::to_proto(r.timestamp);
+        sample->set_status(hal_bridge::to_proto(r.output.status));
         if (!r.output.error_message.empty())
             sample->set_error(r.output.error_message);
         // Pack the full TestResult into the Any payload.
-        hal::common::TestResult proto_result = client::hal_bridge::to_proto(r);
+        hal::common::TestResult proto_result = hal_bridge::to_proto(r);
         sample->mutable_payload()->PackFrom(proto_result);
         sample->set_type_url("type.googleapis.com/hal.common.TestResult");
     }

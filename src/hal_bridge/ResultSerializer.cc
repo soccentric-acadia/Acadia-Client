@@ -10,7 +10,7 @@
 #include <cstdint>
 #include <variant>
 
-namespace client::hal_bridge {
+namespace acadia::client::hal_bridge {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Enum: hal::Status ↔ hal::common::TestStatus
@@ -274,4 +274,4 @@ hal::TestResult from_proto(const hal::common::TestResult& p, int depth) {
     return r;
 }
 
-} // namespace client::hal_bridge
+} // namespace acadia::client::hal_bridge
