@@ -11,6 +11,9 @@ CROSS_BUILD_DIR  := build/cross
 
 # Parallel jobs (override with make JOBS=N)
 JOBS := $(shell nproc)
+# QEMU ARM64 emulation can't sustain as many parallel GCC processes as the
+# host; cap Docker cross-builds to avoid cc1plus segfaults under heavy load.
+DOCKER_JOBS := $(shell echo $$(( $(shell nproc) < 4 ? $(shell nproc) : 4 )))
 DOCKER_IMAGE := acadia
 
 # Mount the *parent* Acadia/ directory so both Acadia-Client and Acadia-HAL
@@ -143,7 +146,7 @@ docker-configure: docker-image
 
 docker-build: docker-image
 	@echo "Building project with Docker/Ninja..."
-	$(DOCKER_RUN) "if [ ! -f $(DOCKER_CROSS_BUILD_DIR)/build.ninja ]; then mkdir -p $(DOCKER_CROSS_BUILD_DIR) && cd $(DOCKER_CROSS_BUILD_DIR) && cmake -GNinja -DBUILD_TESTS=ON $(DOCKER_SRC_DIR); fi && cd $(DOCKER_CROSS_BUILD_DIR) && ninja -j$(JOBS)"
+	$(DOCKER_RUN) "if [ ! -f $(DOCKER_CROSS_BUILD_DIR)/build.ninja ]; then mkdir -p $(DOCKER_CROSS_BUILD_DIR) && cd $(DOCKER_CROSS_BUILD_DIR) && cmake -GNinja -DBUILD_TESTS=ON $(DOCKER_SRC_DIR); fi && cd $(DOCKER_CROSS_BUILD_DIR) && ninja -j$(DOCKER_JOBS)"
 
 docker-test: docker-build
 	@echo "Running tests in Docker (ARM64 via QEMU)..."
