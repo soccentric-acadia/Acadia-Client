@@ -156,7 +156,7 @@ void Spool::exec(const char* sql) {
 bool Spool::insert_batch(const std::string& run_id, int64_t batch_seq,
                           const Bytes& payload) {
     std::lock_guard<std::mutex> lk(mtx_);
-    if (result_spool_full()) {
+    if (result_spool_full_locked()) {
         spdlog::warn("spool: result spool full, dropping batch run_id={} seq={}",
                      run_id, batch_seq);
         return false;
@@ -224,8 +224,8 @@ void Spool::purge_acked(int64_t cutoff_ns) {
     if (deleted > 0) spdlog::debug("spool: purged {} acked result rows", deleted);
 }
 
-uint64_t Spool::result_bytes_used() const {
-    std::lock_guard<std::mutex> lk(mtx_);
+uint64_t Spool::result_bytes_used_locked() const {
+    // mtx_ must already be held by caller.
     const char* sql = "SELECT COALESCE(SUM(LENGTH(payload)), 0) FROM batches WHERE acked=0";
     sqlite3_stmt* stmt;
     sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr);
@@ -236,9 +236,19 @@ uint64_t Spool::result_bytes_used() const {
     return total;
 }
 
+uint64_t Spool::result_bytes_used() const {
+    std::lock_guard<std::mutex> lk(mtx_);
+    return result_bytes_used_locked();
+}
+
+bool Spool::result_spool_full_locked() const {
+    // mtx_ must already be held by caller.
+    return result_bytes_used_locked() >= result_cap_;
+}
+
 bool Spool::result_spool_full() const {
-    // Caller must hold mtx_
-    return result_bytes_used() >= result_cap_;
+    std::lock_guard<std::mutex> lk(mtx_);
+    return result_spool_full_locked();
 }
 
 // ---------------------------------------------------------------------------
@@ -248,7 +258,7 @@ bool Spool::result_spool_full() const {
 bool Spool::insert_log(const std::string& run_id, int64_t batch_seq,
                         const Bytes& payload) {
     std::lock_guard<std::mutex> lk(mtx_);
-    if (log_spool_full()) {
+    if (log_spool_full_locked()) {
         // Drop oldest acked row
         exec("DELETE FROM log_batches WHERE rowid = "
              "(SELECT rowid FROM log_batches ORDER BY created_at ASC LIMIT 1)");
@@ -315,8 +325,7 @@ void Spool::evict_oldest_logs(size_t n) {
     sqlite3_finalize(stmt);
 }
 
-uint64_t Spool::log_bytes_used() const {
-    std::lock_guard<std::mutex> lk(mtx_);
+uint64_t Spool::log_bytes_used_locked() const {
     const char* sql = "SELECT COALESCE(SUM(LENGTH(payload)), 0) FROM log_batches WHERE acked=0";
     sqlite3_stmt* stmt;
     sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr);
@@ -327,8 +336,18 @@ uint64_t Spool::log_bytes_used() const {
     return total;
 }
 
+uint64_t Spool::log_bytes_used() const {
+    std::lock_guard<std::mutex> lk(mtx_);
+    return log_bytes_used_locked();
+}
+
+bool Spool::log_spool_full_locked() const {
+    return log_bytes_used_locked() >= log_cap_;
+}
+
 bool Spool::log_spool_full() const {
-    return log_bytes_used() >= log_cap_;
+    std::lock_guard<std::mutex> lk(mtx_);
+    return log_spool_full_locked();
 }
 
 // ---------------------------------------------------------------------------

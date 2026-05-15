@@ -132,6 +132,12 @@ private:
     uint64_t         log_cap_;
     std::string      path_;  // stored for quarantine reporting
 
+    // Unlocked capacity helpers — caller must hold mtx_.
+    uint64_t result_bytes_used_locked() const;
+    uint64_t log_bytes_used_locked()    const;
+    bool     result_spool_full_locked() const;
+    bool     log_spool_full_locked()    const;
+
     void exec(const char* sql);
     void apply_schema();
     void write_schema_version(int version);
