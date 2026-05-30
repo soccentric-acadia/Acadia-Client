@@ -14,6 +14,7 @@ add_subdirectory(ota)
 add_subdirectory(log)
 add_subdirectory(janitor)
 add_subdirectory(run)
+add_subdirectory(hal_service)
 
 # ---------------------------------------------------------------------------
 # Main executable
@@ -33,6 +34,7 @@ target_link_libraries(acadia-client PRIVATE
     acadia_config
     acadia_diag
     acadia_hal_bridge
+    acadia_hal_service
     acadia_janitor
     acadia_log
     acadia_ota

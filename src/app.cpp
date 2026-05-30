@@ -6,9 +6,66 @@
 
 #include "client_service.pb.h"
 #include "registry/AdapterRegistry.h"
+#include "hal_service/HalServiceImpl.h"
+
+#include <grpcpp/grpcpp.h>
+
+// ─── Real adapters (35 modules with HAL source) ───────────────────────────
+#include "registry/adapters/audio_interfaces_adapter.h"
+#include "registry/adapters/camera_interfaces_adapter.h"
+#include "registry/adapters/camera_module3_adapter.h"
+#include "registry/adapters/clock_and_timing_adapter.h"
+#include "registry/adapters/communication_interface_adapter.h"
 #include "registry/adapters/cpu_adapter.h"
-#include "registry/adapters/thermal_adapter.h"
+#include "registry/adapters/debug_and_development_interfaces_adapter.h"
+#include "registry/adapters/deep_learning_accelerator_adapter.h"
+#include "registry/adapters/display_interfaces_adapter.h"
+#include "registry/adapters/environmental_adapter.h"
+#include "registry/adapters/ethernet_adapter.h"
+#include "registry/adapters/ethernet_switch_adapter.h"
+#include "registry/adapters/external_connector_adapter.h"
+#include "registry/adapters/functional_safety_adapter.h"
+#include "registry/adapters/gnss_adapter.h"
+#include "registry/adapters/gpio_adapter.h"
+#include "registry/adapters/gpu_adapter.h"
+#include "registry/adapters/imu_adapter.h"
+#include "registry/adapters/mcu_interface_adapter.h"
+#include "registry/adapters/pcie_adapter.h"
+#include "registry/adapters/poe_hat_adapter.h"
+#include "registry/adapters/power_management_adapter.h"
+#include "registry/adapters/reliability_adapter.h"
+#include "registry/adapters/security_features_adapter.h"
+#include "registry/adapters/sense_hat_adapter.h"
+#include "registry/adapters/serializer_deserializer_adapter.h"
+#include "registry/adapters/software_interface_adapter.h"
+#include "registry/adapters/storage_adapter.h"
+#include "registry/adapters/system_integration_adapter.h"
 #include "registry/adapters/system_memory_adapter.h"
+#include "registry/adapters/thermal_adapter.h"
+#include "registry/adapters/usb_adapter.h"
+#include "registry/adapters/video_encode_decode_adapter.h"
+#include "registry/adapters/vision_accelerator_adapter.h"
+#include "registry/adapters/watchdog_and_reset_adapter.h"
+
+// ─── Phase 3 — 16 new real adapters ──────────────────────────────────────
+#include "registry/adapters/accelerometer_adapter.h"
+#include "registry/adapters/analog_input_adapter.h"
+#include "registry/adapters/battery_adapter.h"
+#include "registry/adapters/bluetooth_adapter.h"
+#include "registry/adapters/can_bus_adapter.h"
+#include "registry/adapters/emmc_adapter.h"
+#include "registry/adapters/i2c_adapter.h"
+#include "registry/adapters/mipi_csi_adapter.h"
+#include "registry/adapters/mipi_dsi_adapter.h"
+#include "registry/adapters/nvme_adapter.h"
+#include "registry/adapters/pwm_output_adapter.h"
+#include "registry/adapters/rs485_adapter.h"
+#include "registry/adapters/rtc_adapter.h"
+#include "registry/adapters/sd_card_adapter.h"
+#include "registry/adapters/spi_adapter.h"
+#include "registry/adapters/uart_adapter.h"
+
+// ─── Honest-stub for any unrecognised modules ─────────────────────────────
 #include "registry/adapters/stub_adapter.h"
 
 using namespace acadia::stream;
@@ -24,12 +81,63 @@ static std::unique_ptr<AdapterRegistry> build_adapter_registry(
 {
     auto reg = std::make_unique<AdapterRegistry>();
 
-    // Real adapters — add one per implemented module.
+    // ── Real adapters — 35 modules with HAL C++ source ────────────────────
+    reg->register_adapter(std::make_unique<AudioInterfacesAdapter>());
+    reg->register_adapter(std::make_unique<CameraInterfacesAdapter>());
+    reg->register_adapter(std::make_unique<CameraModule3Adapter>());
+    reg->register_adapter(std::make_unique<ClockAndTimingAdapter>());
+    reg->register_adapter(std::make_unique<CommunicationInterfaceAdapter>());
     reg->register_adapter(std::make_unique<CpuAdapter>());
-    reg->register_adapter(std::make_unique<ThermalAdapter>());
+    reg->register_adapter(std::make_unique<DebugAndDevelopmentInterfacesAdapter>());
+    reg->register_adapter(std::make_unique<DeepLearningAcceleratorAdapter>());
+    reg->register_adapter(std::make_unique<DisplayInterfacesAdapter>());
+    reg->register_adapter(std::make_unique<EnvironmentalAdapter>());
+    reg->register_adapter(std::make_unique<EthernetAdapter>());
+    reg->register_adapter(std::make_unique<EthernetSwitchAdapter>());
+    reg->register_adapter(std::make_unique<ExternalConnectorAdapter>());
+    reg->register_adapter(std::make_unique<FunctionalSafetyAdapter>());
+    reg->register_adapter(std::make_unique<GnssAdapter>());
+    reg->register_adapter(std::make_unique<GpioAdapter>());
+    reg->register_adapter(std::make_unique<GpuAdapter>());
+    reg->register_adapter(std::make_unique<ImuAdapter>());
+    reg->register_adapter(std::make_unique<McuInterfaceAdapter>());
+    reg->register_adapter(std::make_unique<PcieAdapter>());
+    reg->register_adapter(std::make_unique<PoeHatAdapter>());
+    reg->register_adapter(std::make_unique<PowerManagementAdapter>());
+    reg->register_adapter(std::make_unique<ReliabilityAdapter>());
+    reg->register_adapter(std::make_unique<SecurityFeaturesAdapter>());
+    reg->register_adapter(std::make_unique<SenseHatAdapter>());
+    reg->register_adapter(std::make_unique<SerializerDeserializerAdapter>());
+    reg->register_adapter(std::make_unique<SoftwareInterfaceAdapter>());
+    reg->register_adapter(std::make_unique<StorageAdapter>());
+    reg->register_adapter(std::make_unique<SystemIntegrationAdapter>());
     reg->register_adapter(std::make_unique<SystemMemoryAdapter>());
+    reg->register_adapter(std::make_unique<ThermalAdapter>());
+    reg->register_adapter(std::make_unique<UsbAdapter>());
+    reg->register_adapter(std::make_unique<VideoEncodeDecodeAdapter>());
+    reg->register_adapter(std::make_unique<VisionAcceleratorAdapter>());
+    reg->register_adapter(std::make_unique<WatchdogAndResetAdapter>());
 
-    // Stub adapters for all modules not yet implemented.
+    // ── Phase 3 — 16 new real adapters ───────────────────────────────────
+    reg->register_adapter(std::make_unique<AccelerometerAdapter>());
+    reg->register_adapter(std::make_unique<AnalogInputAdapter>());
+    reg->register_adapter(std::make_unique<BatteryAdapter>());
+    reg->register_adapter(std::make_unique<BluetoothAdapter>());
+    reg->register_adapter(std::make_unique<CanBusAdapter>());
+    reg->register_adapter(std::make_unique<EmmcAdapter>());
+    reg->register_adapter(std::make_unique<I2cAdapter>());
+    reg->register_adapter(std::make_unique<MipiCsiAdapter>());
+    reg->register_adapter(std::make_unique<MipiDsiAdapter>());
+    reg->register_adapter(std::make_unique<NvmeAdapter>());
+    reg->register_adapter(std::make_unique<PwmOutputAdapter>());
+    reg->register_adapter(std::make_unique<Rs485Adapter>());
+    reg->register_adapter(std::make_unique<RtcAdapter>());
+    reg->register_adapter(std::make_unique<SdCardAdapter>());
+    reg->register_adapter(std::make_unique<SpiAdapter>());
+    reg->register_adapter(std::make_unique<UartAdapter>());
+
+    // ── Honest stubs — for any truly unrecognised module IDs ─────────────
+    // Returns SKIPPED with an explanatory message, NOT a fake pass.
     for (const auto& m : all_modules) {
         if (!reg->has_adapter(m.id)) {
             reg->register_adapter(std::make_unique<StubAdapter>(m.id));
@@ -99,6 +207,26 @@ bool App::init() {
     orchestrator_ = std::make_unique<RunOrchestrator>(
         *spool_, *stream_, std::move(hal_fn));
 
+    // 4b. HalService gRPC server — shares the same adapter registry (invariant 0.2).
+    //     Runs on hal_service_port; no DB writes on this path (invariant 0.3).
+    {
+        const std::string listen_addr =
+            cfg_.hal_service_bind + ":" + std::to_string(cfg_.hal_service_port);
+
+        auto hal_svc_impl = std::make_unique<hal_service::HalServiceImpl>(
+            shared_registry, *registry_);
+
+        ::grpc::ServerBuilder builder;
+        builder.AddListeningPort(listen_addr, ::grpc::InsecureServerCredentials());
+        builder.RegisterService(hal_svc_impl.release());  // gRPC takes ownership
+        hal_service_server_ = builder.BuildAndStart();
+        if (!hal_service_server_) {
+            spdlog::critical("app: failed to start HalService on {}", listen_addr);
+            return false;
+        }
+        spdlog::info("app: HalService listening on {} (no DB writes)", listen_addr);
+    }
+
     // 5. Log collector
     LogCollectorConfig lccfg;
     lccfg.extra_paths = cfg_.log_paths;
@@ -166,6 +294,12 @@ void App::run(std::atomic<bool>& shutdown) {
     }
 
     spdlog::info("app: shutdown — stopping subsystems");
+    // Shut down HalService with a grace period before stopping everything else.
+    if (hal_service_server_) {
+        hal_service_server_->Shutdown(
+            std::chrono::system_clock::now() + std::chrono::seconds(5));
+        hal_service_server_.reset();
+    }
     diag_socket_->stop();
     janitor_->stop();
     log_collector_->stop();

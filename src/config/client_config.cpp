@@ -35,6 +35,14 @@ Result<ClientConfig> ClientConfig::load(const std::string& path) {
         cfg.server_port = static_cast<uint16_t>(*v);
     }
 
+    if (auto v = tbl["hal_service_port"].value<int64_t>()) {
+        if (*v < 1 || *v > 65535) {
+            return Result<ClientConfig>::err("hal_service_port out of range");
+        }
+        cfg.hal_service_port = static_cast<uint16_t>(*v);
+    }
+    if (auto v = tbl["hal_service_bind"].value<std::string>()) { cfg.hal_service_bind = *v; }
+
     if (auto v = tbl["spool_path"].value<std::string>())         { cfg.spool_path      = *v; }
     if (auto v = tbl["client_id_path"].value<std::string>())     { cfg.client_id_path  = *v; }
     if (auto v = tbl["tls_ca"].value<std::string>())             { cfg.tls_ca          = *v; }

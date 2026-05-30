@@ -160,7 +160,7 @@ void RunOrchestrator::flush_results(RunContext& ctx,
     batch.set_run_id(ctx.run_id);
     batch.set_batch_seq(++ctx.batch_seq);
     batch.set_module_id(ctx.module_id);
-    batch.set_mode(static_cast<hal::common::ExecutionMode>(ctx.mode));
+    batch.set_mode(hal_bridge::execution_mode_from_int(ctx.mode));
     batch.set_state(terminal ? RunState::COMPLETED : RunState::RUNNING);
     batch.set_terminal(terminal);
 

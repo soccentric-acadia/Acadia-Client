@@ -40,6 +40,11 @@ hal::Status              from_proto(hal::common::TestStatus s);
 hal::common::TestSeverity to_proto(hal::Severity s);
 hal::Severity             from_proto(hal::common::TestSeverity s);
 
+// Explicit ExecutionMode mapping (proto int value → proto enum).
+// Replaces the bare static_cast used in RunOrchestrator::flush_results.
+// Throws std::invalid_argument for any value outside [1,4].
+hal::common::ExecutionMode execution_mode_from_int(int mode_int);
+
 // ─── Typed value ──────────────────────────────────────────────────────────
 
 hal::common::TypedValue to_proto(const hal::Value& v);

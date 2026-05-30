@@ -8,9 +8,30 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <stdexcept>
 #include <variant>
 
 namespace acadia::client::hal_bridge {
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Explicit ExecutionMode mapping (proto int → proto enum).
+// Values mirror common.proto: SINGLE_SHOT=1, LONG_TERM=2, MONITORING=3, EVENT_BASED=4.
+// Any value outside [1,4] throws std::invalid_argument — no silent garbage casts.
+// ─────────────────────────────────────────────────────────────────────────────
+
+hal::common::ExecutionMode execution_mode_from_int(int mode_int) {
+    switch (mode_int) {
+        case 1: return hal::common::SINGLE_SHOT;
+        case 2: return hal::common::LONG_TERM;
+        case 3: return hal::common::MONITORING;
+        case 4: return hal::common::EVENT_BASED;
+        default:
+            throw std::invalid_argument(
+                "execution_mode_from_int: unmapped mode value " +
+                std::to_string(mode_int) +
+                " (valid range: 1=SINGLE_SHOT, 2=LONG_TERM, 3=MONITORING, 4=EVENT_BASED)");
+    }
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Enum: hal::Status ↔ hal::common::TestStatus

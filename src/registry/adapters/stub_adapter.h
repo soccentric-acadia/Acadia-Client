@@ -1,14 +1,9 @@
 #pragma once
-// registry/adapters/stub_adapter.h — Generic stub adapter used for any HAL
-// module that does not yet have a purpose-built adapter.
-//
-// Returns a single TestResult with status = ERROR and an error_message
-// indicating that no real adapter has been wired up.  This prevents the runner
-// from crashing when a module is present in the registry but not yet
-// implemented.
+// registry/adapters/stub_adapter.h — honest SKIPPED stub for modules that do
+// not yet have HAL source.  Returns SKIPPED (not ERROR) with a clear message so
+// operators know the module is intentionally unimplemented, not broken.
 
 #include "registry/AdapterBase.h"
-
 #include <string>
 #include <vector>
 
@@ -16,13 +11,12 @@ namespace acadia::client {
 
 class StubAdapter final : public AdapterBase {
 public:
-    explicit StubAdapter(std::string id) : id_(std::move(id)) {}
+    explicit StubAdapter(std::string module_id) : id_(std::move(module_id)) {}
+    ~StubAdapter() override = default;
 
     std::string module_id() const override { return id_; }
-
-    std::vector<hal::TestResult> run(int /*mode*/,
-                                      const std::vector<uint8_t>& /*config*/) override;
-
+    std::vector<hal::TestResult> run(int mode,
+                                      const std::vector<uint8_t>& config_bytes) override;
 private:
     std::string id_;
 };

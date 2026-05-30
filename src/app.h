@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <memory>
+#include <thread>
 #include "config/client_config.h"
 #include "spool/Spool.h"
 #include "stream/StreamClient.h"
@@ -10,6 +11,10 @@
 #include "janitor/Janitor.h"
 #include "registry/ModuleRegistry.h"
 #include "diag/DiagSocket.h"
+
+// Forward-declare gRPC server to avoid pulling in grpcpp headers into every
+// translation unit that includes app.h.
+namespace grpc { class Server; }
 
 namespace acadia::client {
 
@@ -43,6 +48,11 @@ private:
     std::unique_ptr<LogCollector>    log_collector_;
     std::unique_ptr<Janitor>         janitor_;
     std::unique_ptr<DiagSocket>      diag_socket_;
+
+    // HalService gRPC server — always-on inbound endpoint for PySDK.
+    // Runs in hal_service_thread_; no DB writes on this path.
+    std::unique_ptr<::grpc::Server> hal_service_server_;
+    std::thread                     hal_service_thread_;
 };
 
 } // namespace acadia::client

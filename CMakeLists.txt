@@ -9,6 +9,19 @@ include(cmake/CompilerWarnings.cmake)
 include(GNUInstallDirs)
 
 # ---------------------------------------------------------------------------
+# HAL library (sibling directory) — must come before add_subdirectory(src)
+# so that the acu_full_test target is available when registry/CMakeLists.txt
+# links against it.
+# ---------------------------------------------------------------------------
+find_package(Threads REQUIRED)  # HAL requires Threads::Threads
+
+add_subdirectory(
+    ${CMAKE_SOURCE_DIR}/../Acadia-HAL
+    ${CMAKE_BINARY_DIR}/acadia_hal_build
+    EXCLUDE_FROM_ALL
+)
+
+# ---------------------------------------------------------------------------
 # Dependencies
 # ---------------------------------------------------------------------------
 

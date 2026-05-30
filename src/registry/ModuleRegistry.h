@@ -16,8 +16,11 @@ struct ModuleEntry {
     std::string name;
     std::string version;
     std::string category;
-    std::string config_type_url;
-    std::string result_type_url;
+    std::string proto_package;     // e.g. "hal.modules.cpu"
+    std::string config_type_url;   // e.g. "hal.modules.cpu.Config"
+    std::string result_type_url;   // e.g. "hal.modules.cpu.Result"
+    std::string status;            // "active" | "deprecated"
+    std::string source_path;       // repo-relative C++ header path
     std::vector<std::string> modes;
 };
 

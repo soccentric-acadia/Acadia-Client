@@ -9,9 +9,14 @@
 namespace acadia::client::config {
 
 struct ClientConfig {
-    // gRPC server
+    // gRPC server (outbound — connects to Acadia-Server)
     std::string server_address;
     uint16_t    server_port{50051};
+
+    // HalService listener (inbound — PySDK connects here; no DB writes)
+    // Default port 50052; set hal_service_bind = "127.0.0.1" to restrict access.
+    std::string hal_service_bind{"0.0.0.0"};
+    uint16_t    hal_service_port{50052};
 
     // Identity — loaded or generated at startup; persisted separately.
     // client_id_path is the file where the UUID is stored; override in tests.
