@@ -45,6 +45,7 @@ Result<ClientConfig> ClientConfig::load(const std::string& path) {
 
     if (auto v = tbl["spool_path"].value<std::string>())         { cfg.spool_path      = *v; }
     if (auto v = tbl["client_id_path"].value<std::string>())     { cfg.client_id_path  = *v; }
+    if (auto v = tbl["modules_yaml_path"].value<std::string>())  { cfg.modules_yaml_path = *v; }
     if (auto v = tbl["tls_ca"].value<std::string>())             { cfg.tls_ca          = *v; }
     if (auto v = tbl["tls_cert"].value<std::string>())           { cfg.tls_cert        = *v; }
     if (auto v = tbl["tls_key"].value<std::string>())            { cfg.tls_key         = *v; }
