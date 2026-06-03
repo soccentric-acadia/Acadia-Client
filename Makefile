@@ -37,7 +37,7 @@ SSH := $(SSHPASS) ssh -o StrictHostKeyChecking=no
 SCP := $(SSHPASS) scp -o StrictHostKeyChecking=no
 
 # Default target
-all: docker-build
+all: build
 
 # Deploy to remote target: $(1)=IP address
 define deploy_remote

@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.20)
+cmake_minimum_required(VERSION 3.16)
 project(acadia-client VERSION 0.1.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
@@ -33,6 +33,13 @@ find_package(tomlplusplus REQUIRED)
 
 # yaml-cpp (modules.yaml registry)
 find_package(yaml-cpp REQUIRED)
+# Ubuntu 20.04 yaml-cpp doesn't export yaml-cpp::yaml-cpp target, create wrapper
+if(NOT TARGET yaml-cpp::yaml-cpp)
+  add_library(yaml-cpp-wrapper INTERFACE)
+  target_link_libraries(yaml-cpp-wrapper INTERFACE yaml-cpp)
+  target_include_directories(yaml-cpp-wrapper INTERFACE ${YAML_CPP_INCLUDE_DIR})
+  add_library(yaml-cpp::yaml-cpp ALIAS yaml-cpp-wrapper)
+endif()
 
 # SQLite3
 find_package(SQLite3 REQUIRED)

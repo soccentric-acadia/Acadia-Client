@@ -12,9 +12,8 @@
 #include "registry/ModuleRegistry.h"
 #include "diag/DiagSocket.h"
 
-// Forward-declare gRPC server to avoid pulling in grpcpp headers into every
-// translation unit that includes app.h.
-namespace grpc { class Server; }
+// gRPC forward declarations are version-dependent; include the minimal header.
+#include <grpcpp/server.h>
 
 namespace acadia::client {
 
