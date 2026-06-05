@@ -75,6 +75,17 @@ set(PROTO_DIR "${CMAKE_SOURCE_DIR}/../Acadia-HAL/protos")
 set(PROTO_GEN_DIR "${CMAKE_CURRENT_BINARY_DIR}/proto_gen")
 file(MAKE_DIRECTORY ${PROTO_GEN_DIR})
 
+
+# Compiler warnings
+#set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra -Wpedantic -Werror")
+
+# Enable position independent code for shared libraries
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+
+set(MAINFOLDER ${PROJECT_BINARY_DIR})
+set(EXECUTABLE_OUTPUT_PATH "${MAINFOLDER}/bin")
+set(LIBRARY_OUTPUT_PATH "${MAINFOLDER}/lib")
+
 # Generated sources
 set(PROTO_SRCS
     ${PROTO_GEN_DIR}/common.pb.cc
