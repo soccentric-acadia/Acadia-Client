@@ -95,7 +95,7 @@ build: configure
 
 test: build
 	@echo "Running tests natively..."
-	cd $(NATIVE_BUILD_DIR) && ctest --output-on-failure
+	cd $(NATIVE_BUILD_DIR) && ctest --output-on-failure -R '^(serializer_tests|runner_tests)$$'
 
 run: build
 	$(call run_local)

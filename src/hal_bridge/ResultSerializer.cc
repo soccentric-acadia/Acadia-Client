@@ -60,7 +60,6 @@ hal::Status from_proto(hal::common::TestStatus s) {
         case hal::common::TEST_STATUS_ABORTED: return hal::Status::ABORTED;
         case hal::common::TEST_STATUS_SKIPPED: return hal::Status::SKIPPED;
         case hal::common::TEST_STATUS_UNSPECIFIED:
-        case hal::common::PARTIAL: // deprecated envelope aggregate
         default:
             // Spec: UNSPECIFIED → ERROR with explanatory message
             // error_message is set at the TestOutput/TestResult level; here we

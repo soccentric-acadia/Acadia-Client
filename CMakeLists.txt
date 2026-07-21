@@ -51,6 +51,19 @@ if(gRPC_FOUND)
   message(STATUS "[acadia-client] gRPC ${gRPC_VERSION} via CMake config")
   set(ACADIA_GRPC_LIBRARIES gRPC::grpc++ gRPC::grpc)
   get_target_property(GRPC_CPP_PLUGIN gRPC::grpc_cpp_plugin LOCATION)
+  get_filename_component(GRPC_BIN_DIR "${GRPC_CPP_PLUGIN}" DIRECTORY)
+  find_program(GRPC_CPP_PLUGIN grpc_cpp_plugin
+    HINTS "${GRPC_BIN_DIR}" /usr/local/bin /usr/bin
+    DOC "Path to the grpc_cpp_plugin protoc plugin")
+  if(NOT GRPC_CPP_PLUGIN)
+    message(FATAL_ERROR "[acadia-client] grpc_cpp_plugin not found")
+  endif()
+  find_program(PROTOC_EXECUTABLE protoc
+    HINTS "${GRPC_BIN_DIR}" /usr/local/bin /usr/bin
+    DOC "Path to the protoc compiler")
+  if(NOT PROTOC_EXECUTABLE)
+    message(FATAL_ERROR "[acadia-client] protoc not found")
+  endif()
 else()
   find_package(PkgConfig REQUIRED)
   pkg_check_modules(GRPCPP REQUIRED grpc++)
@@ -63,6 +76,12 @@ else()
   if(NOT GRPC_CPP_PLUGIN)
     message(FATAL_ERROR "[acadia-client] grpc_cpp_plugin not found. "
       "Rebuild the Docker image or pass -DGRPC_CPP_PLUGIN=/path/to/grpc_cpp_plugin.")
+  endif()
+  find_program(PROTOC_EXECUTABLE protoc
+    HINTS /usr/local/bin /usr/bin
+    DOC "Path to the protoc compiler")
+  if(NOT PROTOC_EXECUTABLE)
+    message(FATAL_ERROR "[acadia-client] protoc not found")
   endif()
 endif()
 message(STATUS "[acadia-client] grpc_cpp_plugin: ${GRPC_CPP_PLUGIN}")
@@ -97,7 +116,7 @@ set(PROTO_SRCS
 
 add_custom_command(
     OUTPUT ${PROTO_SRCS}
-    COMMAND protoc
+    COMMAND ${PROTOC_EXECUTABLE}
         --proto_path=${PROTO_DIR}
         --cpp_out=${PROTO_GEN_DIR}
         --grpc_out=${PROTO_GEN_DIR}
