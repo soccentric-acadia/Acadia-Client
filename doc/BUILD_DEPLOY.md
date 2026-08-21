@@ -82,11 +82,14 @@ make run APP_NAME extra-arg
 ```
 
 `deploy-a` and `deploy-b` first run `docker-build`, then copy `build/cross/lib` and
-`build/cross/bin` to `/tmp/acu-test/` on the configured target. The defaults are `192.168.1.3`
-and `192.168.1.13`, user `nvidia`, password `nvidia`. These are conditional, credential-bearing
-operations: override `IP_A`, `IP_B`, `USER`, and `PASS` and verify the device before use. `run`
-executes locally with `LD_LIBRARY_PATH=build/native/lib`; remote `run-a`/`run-b` execute from
-`/tmp/acu-test`.
+`build/cross/bin` to `/tmp/acu-test/` on the configured target. Addresses and SSH
+credentials are **not hardcoded** — they come from the environment at run time
+(`ACADIA_TARGET_ADDRESS`, `ACADIA_TARGET_USER`, and `ACADIA_TARGET_SSH_KEY` or
+`ACADIA_TARGET_PASS`). See `loop/tools/README.md` and the `.env.example` at the master
+repo root; the single source of truth for bench targets is `loop/tools/targets.yaml`.
+Deploy fails fast if an address or credentials are missing, so a stale/wrong target is
+never silently deployed to. `run` executes locally with
+`LD_LIBRARY_PATH=build/native/lib`; remote `run-a`/`run-b` execute from `/tmp/acu-test`.
 
 ## 7. Cleanup
 
