@@ -1,17 +1,17 @@
-// registry/adapters/thermal_adapter.cc — thermal_management HAL adapter.
+// registry/adapters/thermal_management_adapter.cc — thermal_management HAL adapter.
 // HARDWARE-UNVERIFIED: calls real HAL; correctness requires on-target execution.
 
-#include "registry/adapters/thermal_adapter.h"
+#include "registry/adapters/thermal_management_adapter.h"
 #include "thermal_management_lib/thermal_management_lib.h"
 
 #include <algorithm>
 
 namespace acadia::client {
 
-ThermalAdapter::ThermalAdapter() : hal_(std::make_unique<ThermalManagementTesting>()) {}
-ThermalAdapter::~ThermalAdapter() = default;
+ThermalManagementAdapter::ThermalManagementAdapter() : hal_(std::make_unique<ThermalManagementTesting>()) {}
+ThermalManagementAdapter::~ThermalManagementAdapter() = default;
 
-std::vector<hal::TestResult> ThermalAdapter::run(int mode,
+std::vector<hal::TestResult> ThermalManagementAdapter::run(int mode,
                                                    const std::vector<uint8_t>& config_bytes) {
     (void)config_bytes;
     auto test_names = hal_->getAvailableTests();

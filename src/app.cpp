@@ -41,7 +41,7 @@
 #include "registry/adapters/storage_adapter.h"
 #include "registry/adapters/system_integration_adapter.h"
 #include "registry/adapters/system_memory_adapter.h"
-#include "registry/adapters/thermal_adapter.h"
+#include "registry/adapters/thermal_management_adapter.h"
 #include "registry/adapters/usb_adapter.h"
 #include "registry/adapters/video_encode_decode_adapter.h"
 #include "registry/adapters/vision_accelerator_adapter.h"
@@ -117,7 +117,7 @@ static std::unique_ptr<AdapterRegistry> build_adapter_registry(
     reg->register_adapter(std::make_unique<StorageAdapter>());
     reg->register_adapter(std::make_unique<SystemIntegrationAdapter>());
     reg->register_adapter(std::make_unique<SystemMemoryAdapter>());
-    reg->register_adapter(std::make_unique<ThermalAdapter>());
+    reg->register_adapter(std::make_unique<ThermalManagementAdapter>());
     reg->register_adapter(std::make_unique<UsbAdapter>());
     reg->register_adapter(std::make_unique<VideoEncodeDecodeAdapter>());
     reg->register_adapter(std::make_unique<VisionAcceleratorAdapter>());

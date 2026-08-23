@@ -32,7 +32,7 @@ add_library(acadia_registry STATIC
     adapters/storage_adapter.cc
     adapters/system_integration_adapter.cc
     adapters/system_memory_adapter.cc
-    adapters/thermal_adapter.cc
+    adapters/thermal_management_adapter.cc
     adapters/usb_adapter.cc
     adapters/video_encode_decode_adapter.cc
     adapters/vision_accelerator_adapter.cc
