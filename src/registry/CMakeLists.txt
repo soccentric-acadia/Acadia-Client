@@ -1,7 +1,7 @@
 add_library(acadia_registry STATIC
     ModuleRegistry.cc
     AdapterRegistry.cc
-    # ── Real adapters (35 HAL-backed modules) ────────────────────────────
+    # ── HAL-backed adapters (all 54 modules with HAL source) ────────────────
     adapters/audio_interfaces_adapter.cc
     adapters/camera_interfaces_adapter.cc
     adapters/camera_module3_adapter.cc
@@ -37,23 +37,27 @@ add_library(acadia_registry STATIC
     adapters/video_encode_decode_adapter.cc
     adapters/vision_accelerator_adapter.cc
     adapters/watchdog_and_reset_adapter.cc
-    # ── Phase 3 — 16 new real adapters (DISABLED: HAL libs not yet implemented) ──
-    # adapters/accelerometer_adapter.cc
-    # adapters/analog_input_adapter.cc
-    # adapters/battery_adapter.cc
-    # adapters/bluetooth_adapter.cc
-    # adapters/can_bus_adapter.cc
-    # adapters/emmc_adapter.cc
-    # adapters/i2c_adapter.cc
-    # adapters/mipi_csi_adapter.cc
-    # adapters/mipi_dsi_adapter.cc
-    # adapters/nvme_adapter.cc
-    # adapters/pwm_output_adapter.cc
-    # adapters/rs485_adapter.cc
-    # adapters/rtc_adapter.cc
-    # adapters/sd_card_adapter.cc
-    # adapters/spi_adapter.cc
-    # adapters/uart_adapter.cc
+    # ── Phase 3 — 16 new HAL-backed adapters (HAL libs now implemented) ──
+    adapters/accelerometer_adapter.cc
+    adapters/analog_input_adapter.cc
+    adapters/battery_adapter.cc
+    adapters/bluetooth_adapter.cc
+    adapters/can_bus_adapter.cc
+    adapters/emmc_adapter.cc
+    adapters/i2c_adapter.cc
+    adapters/mipi_csi_adapter.cc
+    adapters/mipi_dsi_adapter.cc
+    adapters/nvme_adapter.cc
+    adapters/pwm_output_adapter.cc
+    adapters/rs485_adapter.cc
+    adapters/rtc_adapter.cc
+    adapters/sd_card_adapter.cc
+    adapters/spi_adapter.cc
+    adapters/uart_adapter.cc
+    # ── New HAL-backed adapters (fan / hdmi / wifi) ─────────────────────
+    adapters/fan_adapter.cc
+    adapters/hdmi_adapter.cc
+    adapters/wifi_adapter.cc
     # ── Honest stub for unrecognised modules ─────────────────────────────
     adapters/stub_adapter.cc
 )

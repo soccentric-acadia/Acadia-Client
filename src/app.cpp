@@ -47,23 +47,28 @@
 #include "registry/adapters/vision_accelerator_adapter.h"
 #include "registry/adapters/watchdog_and_reset_adapter.h"
 
-// ─── Phase 3 — 16 new real adapters (DISABLED: HAL libs not yet implemented) ──
-// #include "registry/adapters/accelerometer_adapter.h"
-// #include "registry/adapters/analog_input_adapter.h"
-// #include "registry/adapters/battery_adapter.h"
-// #include "registry/adapters/bluetooth_adapter.h"
-// #include "registry/adapters/can_bus_adapter.h"
-// #include "registry/adapters/emmc_adapter.h"
-// #include "registry/adapters/i2c_adapter.h"
-// #include "registry/adapters/mipi_csi_adapter.h"
-// #include "registry/adapters/mipi_dsi_adapter.h"
-// #include "registry/adapters/nvme_adapter.h"
-// #include "registry/adapters/pwm_output_adapter.h"
-// #include "registry/adapters/rs485_adapter.h"
-// #include "registry/adapters/rtc_adapter.h"
-// #include "registry/adapters/sd_card_adapter.h"
-// #include "registry/adapters/spi_adapter.h"
-// #include "registry/adapters/uart_adapter.h"
+// ─── Phase 3 — 16 new HAL-backed adapters (HAL libs now implemented) ─────
+#include "registry/adapters/accelerometer_adapter.h"
+#include "registry/adapters/analog_input_adapter.h"
+#include "registry/adapters/battery_adapter.h"
+#include "registry/adapters/bluetooth_adapter.h"
+#include "registry/adapters/can_bus_adapter.h"
+#include "registry/adapters/emmc_adapter.h"
+#include "registry/adapters/i2c_adapter.h"
+#include "registry/adapters/mipi_csi_adapter.h"
+#include "registry/adapters/mipi_dsi_adapter.h"
+#include "registry/adapters/nvme_adapter.h"
+#include "registry/adapters/pwm_output_adapter.h"
+#include "registry/adapters/rs485_adapter.h"
+#include "registry/adapters/rtc_adapter.h"
+#include "registry/adapters/sd_card_adapter.h"
+#include "registry/adapters/spi_adapter.h"
+#include "registry/adapters/uart_adapter.h"
+
+// ─── New HAL-backed adapters (fan / hdmi / wifi) ─────────────────────────
+#include "registry/adapters/fan_adapter.h"
+#include "registry/adapters/hdmi_adapter.h"
+#include "registry/adapters/wifi_adapter.h"
 
 // ─── Honest-stub for any unrecognised modules ─────────────────────────────
 #include "registry/adapters/stub_adapter.h"
@@ -118,23 +123,28 @@ static std::unique_ptr<AdapterRegistry> build_adapter_registry(
     reg->register_adapter(std::make_unique<VisionAcceleratorAdapter>());
     reg->register_adapter(std::make_unique<WatchdogAndResetAdapter>());
 
-    // ── Phase 3 — 16 new real adapters (DISABLED: HAL libs not yet implemented) ──
-    // reg->register_adapter(std::make_unique<AccelerometerAdapter>());
-    // reg->register_adapter(std::make_unique<AnalogInputAdapter>());
-    // reg->register_adapter(std::make_unique<BatteryAdapter>());
-    // reg->register_adapter(std::make_unique<BluetoothAdapter>());
-    // reg->register_adapter(std::make_unique<CanBusAdapter>());
-    // reg->register_adapter(std::make_unique<EmmcAdapter>());
-    // reg->register_adapter(std::make_unique<I2cAdapter>());
-    // reg->register_adapter(std::make_unique<MipiCsiAdapter>());
-    // reg->register_adapter(std::make_unique<MipiDsiAdapter>());
-    // reg->register_adapter(std::make_unique<NvmeAdapter>());
-    // reg->register_adapter(std::make_unique<PwmOutputAdapter>());
-    // reg->register_adapter(std::make_unique<Rs485Adapter>());
-    // reg->register_adapter(std::make_unique<RtcAdapter>());
-    // reg->register_adapter(std::make_unique<SdCardAdapter>());
-    // reg->register_adapter(std::make_unique<SpiAdapter>());
-    // reg->register_adapter(std::make_unique<UartAdapter>());
+    // ── Phase 3 — 16 new HAL-backed adapters (HAL libs now implemented) ──
+    reg->register_adapter(std::make_unique<AccelerometerAdapter>());
+    reg->register_adapter(std::make_unique<AnalogInputAdapter>());
+    reg->register_adapter(std::make_unique<BatteryAdapter>());
+    reg->register_adapter(std::make_unique<BluetoothAdapter>());
+    reg->register_adapter(std::make_unique<CanBusAdapter>());
+    reg->register_adapter(std::make_unique<EmmcAdapter>());
+    reg->register_adapter(std::make_unique<I2cAdapter>());
+    reg->register_adapter(std::make_unique<MipiCsiAdapter>());
+    reg->register_adapter(std::make_unique<MipiDsiAdapter>());
+    reg->register_adapter(std::make_unique<NvmeAdapter>());
+    reg->register_adapter(std::make_unique<PwmOutputAdapter>());
+    reg->register_adapter(std::make_unique<Rs485Adapter>());
+    reg->register_adapter(std::make_unique<RtcAdapter>());
+    reg->register_adapter(std::make_unique<SdCardAdapter>());
+    reg->register_adapter(std::make_unique<SpiAdapter>());
+    reg->register_adapter(std::make_unique<UartAdapter>());
+
+    // ── New HAL-backed adapters (fan / hdmi / wifi) ─────────────────────
+    reg->register_adapter(std::make_unique<FanAdapter>());
+    reg->register_adapter(std::make_unique<HdmiAdapter>());
+    reg->register_adapter(std::make_unique<WifiAdapter>());
 
     // ── Honest stubs — for any truly unrecognised module IDs ─────────────
     // Returns SKIPPED with an explanatory message, NOT a fake pass.

@@ -7,10 +7,13 @@ into runs on a target board. The executable is assembled from `src/app.cpp` and 
 subdirectories for configuration, diagnostics, the HAL bridge, registry, run orchestration,
 spooling, and streaming. `client_config` and `client_id` provide process configuration and board
 identity; `DiagSocket` supplies a local diagnostic channel. The registry owns module discovery
-and adapters for GPIO, I2C, SPI, UART, USB, PCIe, NVMe, storage, thermal, power, camera,
-display, audio, GNSS, IMU, GPU, video, security, watchdog, and system integration. The adapter
-inventory is implementation evidence, but individual adapters may still be stubs or
-hardware-dependent, so presence is not proof of successful board operation.
+and adapters for every HAL module in the registry (54 modules: GPIO, I2C, SPI,
+UART, USB, PCIe, NVMe, storage, thermal, power, camera, display, audio, GNSS,
+IMU, GPU, video, security, watchdog, system integration, and the Phase-3
+connectivity/sensor/peripheral set including fan, HDMI, and Wi-Fi). The
+adapter inventory is implementation evidence, but individual adapters may
+still be hardware-dependent, so presence is not proof of successful board
+operation.
 
 `RunOrchestrator` coordinates test execution and result production. `ResultSerializer` converts
 results for the HAL bridge, while `StreamClient` handles the server-facing stream and `Spool`
@@ -36,7 +39,7 @@ important operational cases that are not established by the two committed unit-t
 | 3 | Diagnostic socket | Implemented | Unknown | [ ] Manual verification required |
 | 4 | HAL bridge and result serialization | Implemented | `test_result_serializer.cc` | [ ] Manual verification required |
 | 5 | Module registry and adapter discovery | Implemented | Unknown | [ ] Manual verification required |
-| 6 | Hardware adapter family | Partial: device behavior unverified | Unknown | [ ] Manual verification required |
+| 6 | Hardware adapter family | Implemented (all 54 HAL modules registered); device behavior unverified | Unknown | [ ] Manual verification required |
 | 7 | Run orchestration | Implemented | `test_run_orchestrator.cc` | [ ] Manual verification required |
 | 8 | Server streaming client | Implemented | Unknown | [ ] Manual verification required |
 | 9 | Offline result spool | Implemented | Unknown | [ ] Manual verification required |
