@@ -29,9 +29,14 @@ int ModuleRegistry::load(const std::string& path) {
         if (e.version.empty()) e.version = "0";
         e.category        = node["category"]        ? node["category"].as<std::string>()        : "other";
         e.proto_package   = node["proto_package"]   ? node["proto_package"].as<std::string>()   : "";
-        // YAML keys are "config_type" / "result_type" (no "_url" suffix).
-        e.config_type_url = node["config_type"]     ? node["config_type"].as<std::string>()     : "";
-        e.result_type_url = node["result_type"]     ? node["result_type"].as<std::string>()     : "";
+        // modules.yaml historically stores these under "config_type" /
+        // "result_type" for the first-generation modules and under
+        // "config_type_url" / "result_type_url" for later ones; accept both
+        // spellings so every module resolves its type URLs.
+        e.config_type_url = node["config_type"]     ? node["config_type"].as<std::string>()     :
+                            (node["config_type_url"] ? node["config_type_url"].as<std::string>() : "");
+        e.result_type_url = node["result_type"]     ? node["result_type"].as<std::string>()     :
+                            (node["result_type_url"] ? node["result_type_url"].as<std::string>() : "");
         e.status          = node["status"]          ? node["status"].as<std::string>()          : "active";
         e.source_path     = node["source_path"]     ? node["source_path"].as<std::string>()     : "";
         if (node["modes"] && node["modes"].IsSequence()) {
