@@ -130,6 +130,12 @@ private:
     mutable std::mutex mtx_;
     uint64_t         result_cap_;
     uint64_t         log_cap_;
+
+public:
+    // Task 76: expose the CONFIGURED capacity (not a derived value) so the
+    // heartbeat can report capacity, current usage, and pressure separately.
+    uint64_t result_cap() const { return result_cap_; }
+    uint64_t log_cap() const    { return log_cap_; }
     std::string      path_;  // stored for quarantine reporting
 
     // Unlocked capacity helpers — caller must hold mtx_.

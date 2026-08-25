@@ -60,7 +60,16 @@ void Janitor::sweep() {
         ai->set_last_batch_seq(rs.last_seq);
     }
     report->set_spool_bytes(spool_.result_bytes_used());
-    report->set_spool_cap_bytes(spool_.result_bytes_used() + spool_.log_bytes_used() + 1);
+    // Task 76: report the CONFIGURED cap and pressure separately — the cap is
+    // the configured capacity, not current usage+1.
+    const uint64_t used = spool_.result_bytes_used() + spool_.log_bytes_used();
+    const uint64_t cap  = spool_.result_cap() + spool_.log_cap();
+    report->set_spool_cap_bytes(cap);
+    if (cap > 0) {
+        const double pressure = static_cast<double>(used) / static_cast<double>(cap);
+        report->set_spool_used_bytes(used);
+        report->set_spool_pressure(pressure);
+    }
     stream_.send(std::move(msg));
 
     spdlog::debug("janitor: sweep done, spool_bytes={}", spool_.result_bytes_used());
