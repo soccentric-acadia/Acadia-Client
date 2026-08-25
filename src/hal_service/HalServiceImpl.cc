@@ -75,27 +75,37 @@ hal::common::ResultEnvelope HalServiceImpl::make_envelope(
     return env;
 }
 
-std::shared_ptr<HalServiceImpl::Session>
+std::pair<std::string, std::shared_ptr<HalServiceImpl::Session>>
 HalServiceImpl::acquire_session(const std::string& module_id) {
     auto s = std::make_shared<Session>();
+    // Task 68: unique session id per start so concurrent same-module runs stay
+    // independent (previously one session per module was stomped).
+    static std::atomic<uint64_t> counter{0};
+    s->session_id = "sess-" + module_id + "-" + std::to_string(counter.fetch_add(1));
+    s->module_id = module_id;
     std::lock_guard<std::mutex> lk(sessions_mu_);
-    sessions_[module_id] = s;
-    return s;
+    sessions_[s->session_id] = s;
+    return {s->session_id, s};
 }
 
-void HalServiceImpl::release_session(const std::string& module_id) {
+void HalServiceImpl::release_session(const std::string& session_id) {
     std::lock_guard<std::mutex> lk(sessions_mu_);
-    sessions_.erase(module_id);
+    sessions_.erase(session_id);
 }
 
 std::shared_ptr<HalServiceImpl::Session>
 HalServiceImpl::find_session(const std::string& module_id,
-                              const std::string& /*session_id*/) {
-    // session_id is unused in v1; we track one session per module.
+                              const std::string& session_id) {
     std::lock_guard<std::mutex> lk(sessions_mu_);
-    auto it = sessions_.find(module_id);
-    if (it == sessions_.end()) return nullptr;
-    return it->second;
+    if (!session_id.empty()) {
+        auto it = sessions_.find(session_id);
+        return it == sessions_.end() ? nullptr : it->second;
+    }
+    // Empty session_id -> any session for the module (all-of-module semantics).
+    for (const auto& kv : sessions_) {
+        if (kv.second->module_id == module_id) return kv.second;
+    }
+    return nullptr;
 }
 
 // ---------------------------------------------------------------------------
@@ -148,7 +158,7 @@ HalServiceImpl::find_session(const std::string& module_id,
     spdlog::info("hal_service: StartLongTerm module_id={} interval={}ms forever={}",
                  req->module_id(), interval_ms, run_forever);
 
-    auto session   = acquire_session(req->module_id());
+    auto [session_id, session] = acquire_session(req->module_id());
     auto t_start   = std::chrono::steady_clock::now();
 
     while (!ctx->IsCancelled() && !session->stop_requested.load()) {
@@ -168,14 +178,14 @@ HalServiceImpl::find_session(const std::string& module_id,
                                              module_config_bytes(req->module_config()));
         for (const auto& r : results) {
             if (!writer->Write(make_envelope(req->module_id(), hal::common::LONG_TERM, r))) {
-                release_session(req->module_id());
+                release_session(session_id);
                 return ::grpc::Status::OK;
             }
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(interval_ms));
     }
 
-    release_session(req->module_id());
+    release_session(session_id);
     return ::grpc::Status::OK;
 }
 
@@ -200,7 +210,7 @@ HalServiceImpl::find_session(const std::string& module_id,
     spdlog::info("hal_service: StartMonitoring module_id={} interval={}ms forever={}",
                  req->module_id(), interval_ms, run_forever);
 
-    auto session   = acquire_session(req->module_id());
+    auto [session_id, session] = acquire_session(req->module_id());
     auto t_start   = std::chrono::steady_clock::now();
 
     while (!ctx->IsCancelled() && !session->stop_requested.load()) {
@@ -218,14 +228,14 @@ HalServiceImpl::find_session(const std::string& module_id,
                                              module_config_bytes(req->module_config()));
         for (const auto& r : results) {
             if (!writer->Write(make_envelope(req->module_id(), hal::common::MONITORING, r))) {
-                release_session(req->module_id());
+                release_session(session_id);
                 return ::grpc::Status::OK;
             }
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(interval_ms));
     }
 
-    release_session(req->module_id());
+    release_session(session_id);
     return ::grpc::Status::OK;
 }
 
@@ -248,7 +258,7 @@ HalServiceImpl::find_session(const std::string& module_id,
     spdlog::info("hal_service: StartEventBased module_id={} poll={}ms",
                  req->module_id(), poll_ms);
 
-    auto session = acquire_session(req->module_id());
+    auto [session_id, session] = acquire_session(req->module_id());
 
     while (!ctx->IsCancelled() && !session->stop_requested.load()) {
         if (session->paused.load()) {
@@ -261,14 +271,14 @@ HalServiceImpl::find_session(const std::string& module_id,
                                              module_config_bytes(req->module_config()));
         for (const auto& r : results) {
             if (!writer->Write(make_envelope(req->module_id(), hal::common::EVENT_BASED, r))) {
-                release_session(req->module_id());
+                release_session(session_id);
                 return ::grpc::Status::OK;
             }
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(poll_ms));
     }
 
-    release_session(req->module_id());
+    release_session(session_id);
     return ::grpc::Status::OK;
 }
 

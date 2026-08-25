@@ -84,27 +84,30 @@ private:
         const hal::TestResult&     r);
 
     // ── Per-session lifecycle ─────────────────────────────────────────────
-    // One active session per module_id (enforced by acquire/release).
+    // Task 68: sessions are keyed by session_id so concurrent same-module runs
+    // are independently controllable. Each start mints a unique id.
     struct Session {
         std::atomic<bool> stop_requested{false};
         std::atomic<bool> paused{false};
+        std::string       session_id;   // unique per start
+        std::string       module_id;    // module this session runs
     };
 
-    // Returns a new Session registered for module_id.  If a session already
-    // exists it is stomped — the caller wins (client restart scenario).
-    std::shared_ptr<Session> acquire_session(const std::string& module_id);
-    void                     release_session(const std::string& module_id);
+    // Mint a new Session registered under a fresh session_id. Returns {id, session}.
+    std::pair<std::string, std::shared_ptr<Session>>
+    acquire_session(const std::string& module_id);
+    void release_session(const std::string& session_id);
 
-    // Look up session_id → module_id mapping, then return the Session.
-    // If session_id is empty, returns all sessions for module_id.
+    // Look up a session by id (exact) or, when session_id is empty, any session
+    // for the module (all-of-module semantics for Stop/Pause/Resume).
     std::shared_ptr<Session> find_session(const std::string& module_id,
                                           const std::string& session_id);
 
     std::shared_ptr<AdapterRegistry> adapter_reg_;
     const ModuleRegistry&            module_reg_;
 
-    std::mutex                                            sessions_mu_;
-    std::unordered_map<std::string, std::shared_ptr<Session>> sessions_; // key = module_id
+    std::mutex                                                  sessions_mu_;
+    std::unordered_map<std::string, std::shared_ptr<Session>>   sessions_; // key = session_id
 };
 
 } // namespace acadia::client::hal_service
