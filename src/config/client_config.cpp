@@ -42,6 +42,7 @@ Result<ClientConfig> ClientConfig::load(const std::string& path) {
         cfg.hal_service_port = static_cast<uint16_t>(*v);
     }
     if (auto v = tbl["hal_service_bind"].value<std::string>()) { cfg.hal_service_bind = *v; }
+    if (auto v = tbl["hal_service_auth_token"].value<std::string>()) { cfg.hal_service_auth_token = *v; }
 
     if (auto v = tbl["spool_path"].value<std::string>())         { cfg.spool_path      = *v; }
     if (auto v = tbl["client_id_path"].value<std::string>())     { cfg.client_id_path  = *v; }
