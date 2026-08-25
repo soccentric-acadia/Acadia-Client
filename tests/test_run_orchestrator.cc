@@ -264,4 +264,34 @@ TEST(RunOrchestrator, StopDuringLongTermProducesAborted) {
     EXPECT_TRUE(found_aborted);
 }
 
+// ─── Task 72: invalid execution mode is rejected before the run starts ────
+
+TEST(RunOrchestrator, InvalidExecutionModeIsRejectedNotCompleted) {
+    auto spool = make_mem_spool();
+    auto stream = make_stub_stream();
+    RunOrchestrator orch(*spool, stream, hal_stub_pass);
+
+    // An unknown/future mode (not 1..4) must be rejected with a failed ACK and
+    // a FAILED run state, never persisted as a completed run.
+    ConfigureRun cfg;
+    cfg.set_run_id("badmode");
+    cfg.set_module_id("cpu");
+    cfg.set_mode(static_cast<hal::common::ExecutionMode>(99));
+    orch.on_configure(cfg);
+    orch.on_start("badmode");
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    orch.stop_all();
+
+    auto batches = spool->fetch_unacked(10);
+    // No result batch should be produced for a rejected run.
+    EXPECT_TRUE(batches.empty());
+    // Run state should reflect FAILED (not COMPLETED).
+    auto states = spool->all_run_states();
+    bool failed = false;
+    for (const auto& rs : states) {
+        if (rs.run_id == "badmode") failed = (rs.state == static_cast<int>(RunState::FAILED));
+    }
+    EXPECT_TRUE(failed);
+}
+
 } // namespace

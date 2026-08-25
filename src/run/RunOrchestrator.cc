@@ -31,8 +31,26 @@ RunOrchestrator::~RunOrchestrator() {
 
 void RunOrchestrator::on_configure(const ConfigureRun& msg) {
     const std::string& run_id = msg.run_id();
+    const int mode = static_cast<int>(msg.mode());
     spdlog::info("orchestrator: ConfigureRun run_id={} module={} mode={}",
-                 run_id, msg.module_id(), static_cast<int>(msg.mode()));
+                 run_id, msg.module_id(), mode);
+
+    // Task 72: validate the execution mode BEFORE starting the run. An unknown
+    // or future enum value must produce an explicit protocol error and a failed
+    // run state — never be persisted as a completed run without an error result.
+    const bool mode_valid = (mode == 1 || mode == 2 || mode == 3 || mode == 4);
+    if (!mode_valid) {
+        spdlog::error("orchestrator: ConfigureRun rejected — unknown execution mode {} for run_id={}",
+                      mode, run_id);
+        spool_.upsert_run_state(run_id, static_cast<int>(RunState::FAILED), 0);
+        ClientMessage err_msg;
+        auto* ack = err_msg.mutable_configure_ack();
+        ack->set_run_id(run_id);
+        ack->set_ok(false);
+        ack->set_error("unknown execution mode: " + std::to_string(mode));
+        stream_.send(std::move(err_msg));
+        return;
+    }
 
     std::lock_guard<std::mutex> lk(mtx_);
     pending_configs_[run_id] = msg;
