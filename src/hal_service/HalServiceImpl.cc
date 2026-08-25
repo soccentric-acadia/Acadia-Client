@@ -33,6 +33,17 @@ HalServiceImpl::HalServiceImpl(std::shared_ptr<AdapterRegistry> adapter_reg,
 // Helpers
 // ---------------------------------------------------------------------------
 
+// Task 67: forward the populated module_config (google.protobuf.Any) to
+// adapters instead of an empty {} payload. Serialize the Any bytes verbatim so
+// the adapter can unpack the real module Config.
+static std::vector<uint8_t> module_config_bytes(const google::protobuf::Any& any) {
+    std::string s;
+    if (any.IsInitialized() && any.SerializeToString(&s)) {
+        return std::vector<uint8_t>(s.begin(), s.end());
+    }
+    return {};  // unset Any -> empty payload (adapter default)
+}
+
 ::grpc::Status HalServiceImpl::validate_module(const std::string& module_id) {
     if (module_id.empty())
         return {::grpc::StatusCode::INVALID_ARGUMENT, "module_id is required"};
@@ -103,7 +114,7 @@ HalServiceImpl::find_session(const std::string& module_id,
 
     auto results = adapter_reg_->invoke(req->module_id(),
                                          1 /*SINGLE_SHOT*/,
-                                         {});
+                                         module_config_bytes(req->module_config()));
     if (results.empty()) {
         resp->set_module_id(req->module_id());
         resp->set_mode(hal::common::SINGLE_SHOT);
@@ -153,7 +164,8 @@ HalServiceImpl::find_session(const std::string& module_id,
             continue;
         }
 
-        auto results = adapter_reg_->invoke(req->module_id(), 2 /*LONG_TERM*/, {});
+        auto results = adapter_reg_->invoke(req->module_id(), 2 /*LONG_TERM*/,
+                                             module_config_bytes(req->module_config()));
         for (const auto& r : results) {
             if (!writer->Write(make_envelope(req->module_id(), hal::common::LONG_TERM, r))) {
                 release_session(req->module_id());
@@ -202,7 +214,8 @@ HalServiceImpl::find_session(const std::string& module_id,
             continue;
         }
 
-        auto results = adapter_reg_->invoke(req->module_id(), 3 /*MONITORING*/, {});
+        auto results = adapter_reg_->invoke(req->module_id(), 3 /*MONITORING*/,
+                                             module_config_bytes(req->module_config()));
         for (const auto& r : results) {
             if (!writer->Write(make_envelope(req->module_id(), hal::common::MONITORING, r))) {
                 release_session(req->module_id());
@@ -244,7 +257,8 @@ HalServiceImpl::find_session(const std::string& module_id,
         }
 
         // mode=4: adapter returns empty when the event condition is NOT met.
-        auto results = adapter_reg_->invoke(req->module_id(), 4 /*EVENT_BASED*/, {});
+        auto results = adapter_reg_->invoke(req->module_id(), 4 /*EVENT_BASED*/,
+                                             module_config_bytes(req->module_config()));
         for (const auto& r : results) {
             if (!writer->Write(make_envelope(req->module_id(), hal::common::EVENT_BASED, r))) {
                 release_session(req->module_id());
