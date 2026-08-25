@@ -71,11 +71,8 @@ static std::vector<hal::TestResult> hal_stub_throw(
 }
 
 // Returns empty (EVENT_BASED: no event fired).
-static std::vector<hal::TestResult> hal_stub_empty(
-    const std::string&, int, const std::vector<uint8_t>&)
-{
-    return {};
-}
+// (hal_stub_empty removed — unused; EVENT_BASED empty results come from the
+// adapter when the condition is not met.)
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 

@@ -41,10 +41,6 @@ hal::TestResult make_result(hal::Status status = hal::Status::PASS,
 
 // ─── Equality helpers ─────────────────────────────────────────────────────────
 
-bool value_eq(const hal::Value& a, const hal::Value& b) {
-    return a == b;
-}
-
 bool output_eq(const hal::TestOutput& a, const hal::TestOutput& b) {
     return a.status        == b.status
         && a.severity      == b.severity
@@ -115,7 +111,7 @@ TEST(ValueRoundTrip, Double) {
 }
 
 TEST(ValueRoundTrip, String) {
-    for (const std::string& s : {"", "hello", "unicode: \xF0\x9F\x98\x80"}) {
+    for (const std::string s : {"", "hello", "unicode: \xF0\x9F\x98\x80"}) {
         hal::Value v = s;
         EXPECT_EQ(from_proto(to_proto(v)), v);
     }

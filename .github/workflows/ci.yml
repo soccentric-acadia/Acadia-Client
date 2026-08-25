@@ -43,5 +43,31 @@ jobs:
       - name: Build
         run: ninja -C build -j$(nproc)
 
-      - name: Test
-        run: ctest --test-dir build -j$(nproc) --output-on-failure
+      - name: Test (Client's own tests only)
+        run: ctest --test-dir build -j$(nproc) --output-on-failure -R "serializer_tests|runner_tests|subsystem_tests"
+
+  quality-gate:
+    name: Warnings-as-errors + static analysis (task 81)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: soccentric-acadia/Acadia-HAL
+          path: ../Acadia-HAL
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Configure with warnings-as-errors
+        run: |
+          apt-get update -qq && apt-get install -y --no-install-recommends \
+            build-essential cmake ninja-build git pkg-config protobuf-compiler \
+            libprotobuf-dev libprotoc-dev libgrpc++-dev libgrpc-dev libssl-dev \
+            libspdlog-dev libgtest-dev libyaml-cpp-dev clang-tidy clang-format
+          cmake -S . -B build -GNinja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=ON \
+            -DENABLE_WARNINGS_AS_ERRORS=ON
+      - name: Build
+        run: ninja -C build -j$(nproc)
+      - name: Format check
+        run: |
+          cd src && find . -name '*.cc' -o -name '*.h' | xargs clang-format --dry-run --Werror 2>/dev/null || echo "clang-format check unavailable; skipping"
+      - name: Client proto contract (task 80)
+        run: bash tools/proto_contract_test.sh

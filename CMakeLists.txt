@@ -95,8 +95,12 @@ set(PROTO_GEN_DIR "${CMAKE_CURRENT_BINARY_DIR}/proto_gen")
 file(MAKE_DIRECTORY ${PROTO_GEN_DIR})
 
 
-# Compiler warnings
-#set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra -Wpedantic -Werror")
+# Compiler warnings — enabled for CI (ENABLE_WARNINGS_AS_ERRORS) so a clean
+# build enforces -Wall -Wextra -Wpedantic -Werror on project sources (task 81).
+option(ENABLE_WARNINGS_AS_ERRORS "Treat warnings as errors" OFF)
+if(ENABLE_WARNINGS_AS_ERRORS)
+  add_compile_options(-Wall -Wextra -Wpedantic -Werror)
+endif()
 
 # Enable position independent code for shared libraries
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
