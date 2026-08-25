@@ -91,13 +91,25 @@ void RunOrchestrator::on_resume(const std::string& run_id) {
 }
 
 void RunOrchestrator::on_stop(const std::string& run_id) {
-    std::unique_lock<std::mutex> lk(mtx_);
-    if (auto it = runs_.find(run_id); it != runs_.end()) {
-        it->second.ctx->stop.store(true);
-        if (it->second.thread.joinable())
-            it->second.thread.detach(); // Will finish naturally
-        runs_.erase(it);
+    // Task 69: join the worker before erasing so it never accesses owner state
+    // (spool_/sender_) after destruction. Previously the thread was detached
+    // and the run erased immediately, leaving a use-after-free window.
+    std::thread worker;
+    bool have = false;
+    {
+        std::lock_guard<std::mutex> lk(mtx_);
+        if (auto it = runs_.find(run_id); it != runs_.end()) {
+            it->second.ctx->stop.store(true);
+            if (it->second.thread.joinable()) {
+                worker = std::move(it->second.thread);
+                have   = true;
+            }
+            runs_.erase(it);
+        }
     }
+    // Join OUTSIDE the lock: the worker may need the lock or spool during its
+    // final cleanup; holding mtx_ here would deadlock.
+    if (have && worker.joinable()) worker.join();
     spool_.delete_run_state(run_id);
 }
 
@@ -106,12 +118,17 @@ void RunOrchestrator::on_batch_ack(const std::string& run_id, int64_t batch_seq)
 }
 
 void RunOrchestrator::stop_all() {
-    std::unique_lock<std::mutex> lk(mtx_);
-    for (auto& [id, entry] : runs_) {
-        entry.ctx->stop.store(true);
-        if (entry.thread.joinable()) entry.thread.join();
+    std::vector<std::thread> workers;
+    {
+        std::unique_lock<std::mutex> lk(mtx_);
+        for (auto& [id, entry] : runs_) {
+            entry.ctx->stop.store(true);
+            if (entry.thread.joinable()) workers.push_back(std::move(entry.thread));
+        }
+        runs_.clear();
     }
-    runs_.clear();
+    // Task 69: join outside the lock so workers' final cleanup can proceed.
+    for (auto& w : workers) if (w.joinable()) w.join();
 }
 
 // ---------------------------------------------------------------------------
