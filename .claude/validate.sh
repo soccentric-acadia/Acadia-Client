@@ -27,6 +27,10 @@ assert "referenced HAL proto sources exist" \
      [ -f ../Acadia-HAL/protos/$p.proto ] || { echo "missing $p.proto in Acadia-HAL"; exit 1; }
    done'
 
+# Task 80: every registry module must have a HAL proto + Client adapter
+# (generated-proto consumption contract).
+check "HAL-to-Client proto contract" "bash" 'bash tools/proto_contract_test.sh'
+
 [ "$TIER" = "quick" ] && { report "$TIER"; exit $?; }
 
 # --- full ------------------------------------------------------------------
