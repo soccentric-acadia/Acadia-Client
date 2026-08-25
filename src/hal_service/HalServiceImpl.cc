@@ -26,8 +26,29 @@ constexpr int kPauseCheckMs        = 50;   // sleep granularity while paused
 // ---------------------------------------------------------------------------
 
 HalServiceImpl::HalServiceImpl(std::shared_ptr<AdapterRegistry> adapter_reg,
-                                const ModuleRegistry&             module_reg)
-    : adapter_reg_(std::move(adapter_reg)), module_reg_(module_reg) {}
+                                const ModuleRegistry&             module_reg,
+                                const std::string&                auth_token)
+    : adapter_reg_(std::move(adapter_reg)), module_reg_(module_reg), auth_token_(auth_token) {}
+
+// Task 70: authenticate inbound HalService calls when a token is configured.
+// The client must present `authorization: Bearer <token>` in request metadata;
+// otherwise the call is rejected with UNAUTHENTICATED (fail closed).
+::grpc::Status HalServiceImpl::require_auth(::grpc::ServerContext* ctx,
+                                             const std::string&     expected_token) {
+    if (expected_token.empty()) return ::grpc::Status::OK;  // no auth configured
+    if (ctx == nullptr) return ::grpc::Status(::grpc::StatusCode::UNAUTHENTICATED,
+                                              "authentication required");
+    auto it = ctx->client_metadata().find("authorization");
+    if (it == ctx->client_metadata().end())
+        return ::grpc::Status(::grpc::StatusCode::UNAUTHENTICATED,
+                              "missing authorization header");
+    const std::string header(it->second.data(), it->second.size());
+    const std::string expected = "Bearer " + expected_token;
+    if (header != expected)
+        return ::grpc::Status(::grpc::StatusCode::UNAUTHENTICATED,
+                              "invalid authorization token");
+    return ::grpc::Status::OK;
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -113,10 +134,11 @@ HalServiceImpl::find_session(const std::string& module_id,
 // ---------------------------------------------------------------------------
 
 ::grpc::Status HalServiceImpl::RunSingleShot(
-    ::grpc::ServerContext*        /*ctx*/,
+    ::grpc::ServerContext*        ctx,
     const hal::SingleShotRequest*  req,
     hal::common::ResultEnvelope*   resp)
 {
+    if (auto st = require_auth(ctx, auth_token_); !st.ok()) return st;
     auto st = validate_module(req->module_id());
     if (!st.ok()) return st;
 
@@ -146,6 +168,7 @@ HalServiceImpl::find_session(const std::string& module_id,
     const hal::LongTermRequest*                        req,
     ::grpc::ServerWriter<hal::common::ResultEnvelope>* writer)
 {
+    if (auto st = require_auth(ctx, auth_token_); !st.ok()) return st;
     auto st = validate_module(req->module_id());
     if (!st.ok()) return st;
 
@@ -198,6 +221,7 @@ HalServiceImpl::find_session(const std::string& module_id,
     const hal::MonitoringRequest*                      req,
     ::grpc::ServerWriter<hal::common::ResultEnvelope>* writer)
 {
+    if (auto st = require_auth(ctx, auth_token_); !st.ok()) return st;
     auto st = validate_module(req->module_id());
     if (!st.ok()) return st;
 
@@ -248,6 +272,7 @@ HalServiceImpl::find_session(const std::string& module_id,
     const hal::EventBasedRequest*                      req,
     ::grpc::ServerWriter<hal::common::ResultEnvelope>* writer)
 {
+    if (auto st = require_auth(ctx, auth_token_); !st.ok()) return st;
     auto st = validate_module(req->module_id());
     if (!st.ok()) return st;
 
@@ -287,10 +312,11 @@ HalServiceImpl::find_session(const std::string& module_id,
 // ---------------------------------------------------------------------------
 
 ::grpc::Status HalServiceImpl::Stop(
-    ::grpc::ServerContext* /*ctx*/,
+    ::grpc::ServerContext* ctx,
     const hal::StopRequest*  req,
     hal::StopResponse*       resp)
 {
+    if (auto st = require_auth(ctx, auth_token_); !st.ok()) return st;
     spdlog::info("hal_service: Stop module_id={} session_id={}",
                  req->module_id(), req->session_id());
     auto s = find_session(req->module_id(), req->session_id());
@@ -305,10 +331,11 @@ HalServiceImpl::find_session(const std::string& module_id,
 }
 
 ::grpc::Status HalServiceImpl::Pause(
-    ::grpc::ServerContext* /*ctx*/,
+    ::grpc::ServerContext* ctx,
     const hal::PauseRequest*  req,
     hal::PauseResponse*       resp)
 {
+    if (auto st = require_auth(ctx, auth_token_); !st.ok()) return st;
     spdlog::info("hal_service: Pause module_id={}", req->module_id());
     auto s = find_session(req->module_id(), req->session_id());
     if (s) {
@@ -322,10 +349,11 @@ HalServiceImpl::find_session(const std::string& module_id,
 }
 
 ::grpc::Status HalServiceImpl::Resume(
-    ::grpc::ServerContext* /*ctx*/,
+    ::grpc::ServerContext* ctx,
     const hal::ResumeRequest*  req,
     hal::ResumeResponse*       resp)
 {
+    if (auto st = require_auth(ctx, auth_token_); !st.ok()) return st;
     spdlog::info("hal_service: Resume module_id={}", req->module_id());
     auto s = find_session(req->module_id(), req->session_id());
     if (s) {
@@ -343,10 +371,11 @@ HalServiceImpl::find_session(const std::string& module_id,
 // ---------------------------------------------------------------------------
 
 ::grpc::Status HalServiceImpl::ListModules(
-    ::grpc::ServerContext*          /*ctx*/,
+    ::grpc::ServerContext*          ctx,
     const hal::ListModulesRequest*  /*req*/,
     hal::ListModulesResponse*        resp)
 {
+    if (auto st = require_auth(ctx, auth_token_); !st.ok()) return st;
     spdlog::debug("hal_service: ListModules");
     for (const auto& m : module_reg_.all()) {
         auto* entry = resp->add_modules();

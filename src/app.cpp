@@ -224,7 +224,7 @@ bool App::init() {
             cfg_.hal_service_bind + ":" + std::to_string(cfg_.hal_service_port);
 
         auto hal_svc_impl = std::make_unique<hal_service::HalServiceImpl>(
-            shared_registry, *registry_);
+            shared_registry, *registry_, cfg_.hal_service_auth_token);
 
         ::grpc::ServerBuilder builder;
         builder.AddListeningPort(listen_addr, ::grpc::InsecureServerCredentials());

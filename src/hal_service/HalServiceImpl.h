@@ -27,7 +27,13 @@ namespace acadia::client::hal_service {
 class HalServiceImpl final : public hal::HalService::Service {
 public:
     HalServiceImpl(std::shared_ptr<AdapterRegistry> adapter_reg,
-                   const ModuleRegistry&             module_reg);
+                   const ModuleRegistry&             module_reg,
+                   const std::string&                auth_token = "");
+
+    // Task 70: reject an inbound call when an auth token is configured and the
+    // client did not present it in the 'authorization' metadata.
+    static ::grpc::Status require_auth(::grpc::ServerContext* ctx,
+                                       const std::string&     expected_token);
 
     // ── Unary RPC ─────────────────────────────────────────────────────────
     ::grpc::Status RunSingleShot(
@@ -105,6 +111,7 @@ private:
 
     std::shared_ptr<AdapterRegistry> adapter_reg_;
     const ModuleRegistry&            module_reg_;
+    std::string                     auth_token_;  // empty = no auth required
 
     std::mutex                                                  sessions_mu_;
     std::unordered_map<std::string, std::shared_ptr<Session>>   sessions_; // key = session_id

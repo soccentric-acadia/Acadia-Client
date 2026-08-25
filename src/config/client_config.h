@@ -14,9 +14,13 @@ struct ClientConfig {
     uint16_t    server_port{50051};
 
     // HalService listener (inbound — PySDK connects here; no DB writes)
-    // Default port 50052; set hal_service_bind = "127.0.0.1" to restrict access.
-    std::string hal_service_bind{"0.0.0.0"};
+    // Task 70: secure by default. Bind defaults to loopback (127.0.0.1); set
+    // hal_service_bind = "0.0.0.0" ONLY when an authenticated transport or
+    // firewall controls access. hal_service_auth_token (optional) is checked
+    // by the listener to reject unauthenticated connections.
+    std::string hal_service_bind{"127.0.0.1"};
     uint16_t    hal_service_port{50052};
+    std::string hal_service_auth_token;  // optional bearer token for inbound calls
 
     // Identity — loaded or generated at startup; persisted separately.
     // client_id_path is the file where the UUID is stored; override in tests.
