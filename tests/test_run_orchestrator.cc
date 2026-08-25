@@ -321,3 +321,32 @@ TEST(SpoolCursor, ResumesAfterCursorWithoutDuplication) {
     auto after_last = spool->fetch_unacked_after(after_first[1].created_at, after_first[1].batch_seq, 128);
     EXPECT_TRUE(after_last.empty());
 }
+
+// ─── Task 78: disconnect ordering + dedup ────────────────────────────────────
+
+TEST(ReplayOrdering, PreservesMonotonicSequenceAndIdempotentIdentity) {
+    auto spool = make_mem_spool();
+    // Simulate a backlog produced across a disconnect: three batches with
+    // monotonic batch_seq (the idempotent batch identity is run_id+batch_seq).
+    for (int64_t i = 0; i < 3; ++i) {
+        TestResultBatch b;
+        b.set_run_id("run_order");
+        b.set_batch_seq(i);
+        b.set_terminal(i == 2);
+        std::string bytes; b.SerializeToString(&bytes);
+        spool->insert_batch("run_order", i, Bytes(bytes.begin(), bytes.end()));
+    }
+    auto batches = spool->fetch_unacked(10);
+    ASSERT_EQ(batches.size(), 3u);
+    // Replay must emit batches in strictly increasing batch_seq order so the
+    // server's dedup/ordering (run_id+batch_seq) sees no gaps or duplicates.
+    int64_t prev = -1;
+    for (const auto& row : batches) {
+        TestResultBatch b;
+        ASSERT_TRUE(b.ParseFromArray(row.payload.data(), static_cast<int>(row.payload.size())));
+        EXPECT_GT(b.batch_seq(), prev);  // strictly increasing, no duplicate
+        EXPECT_EQ(b.run_id(), "run_order");
+        prev = b.batch_seq();
+    }
+    EXPECT_EQ(prev, 2);
+}
