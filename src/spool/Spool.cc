@@ -21,6 +21,45 @@ static int64_t now_ns() {
 }
 
 // ---------------------------------------------------------------------------
+// Task 74: checked SQLite helpers — every prepare/bind/step error is surfaced,
+// never silently ignored (corrupt, read-only, full, locked, schema-error).
+// ---------------------------------------------------------------------------
+
+// Prepare a statement; returns nullptr (and logs the error) on failure.
+static sqlite3_stmt* prep_checked(sqlite3* db, const char* sql, const char* what) {
+    sqlite3_stmt* stmt = nullptr;
+    int rc = sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr);
+    if (rc != SQLITE_OK) {
+        spdlog::error("spool: prepare {} failed: {} ({})", what,
+                      sqlite3_errmsg(db), rc);
+        return nullptr;
+    }
+    return stmt;
+}
+
+// Step to DONE (a write / no-row statement); false on any error.
+static bool step_done_checked(sqlite3* db, sqlite3_stmt* stmt, const char* what) {
+    int rc = sqlite3_step(stmt);
+    if (rc != SQLITE_DONE && rc != SQLITE_ROW) {
+        spdlog::error("spool: step {} failed: {} ({})", what,
+                      sqlite3_errmsg(db), rc);
+        sqlite3_finalize(stmt);
+        return false;
+    }
+    return true;
+}
+
+// Bind a text param; false on error.
+static bool bind_text_checked(sqlite3_stmt* stmt, int idx, const std::string& v,
+                              const char* what) {
+    if (sqlite3_bind_text(stmt, idx, v.c_str(), -1, SQLITE_TRANSIENT) != SQLITE_OK) {
+        spdlog::error("spool: bind_text {} param {} failed", what, idx);
+        return false;
+    }
+    return true;
+}
+
+// ---------------------------------------------------------------------------
 // Legacy quarantine (Section 4.5 of req.md)
 // ---------------------------------------------------------------------------
 
@@ -164,26 +203,26 @@ bool Spool::insert_batch(const std::string& run_id, int64_t batch_seq,
     const char* sql =
         "INSERT OR REPLACE INTO batches(run_id, batch_seq, created_at, acked, payload) "
         "VALUES (?, ?, ?, 0, ?)";
-    sqlite3_stmt* stmt;
-    sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr);
-    sqlite3_bind_text(stmt, 1, run_id.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_stmt* stmt = prep_checked(db_, sql, "insert_batch");
+    if (!stmt) return false;
+    if (!bind_text_checked(stmt, 1, run_id, "insert_batch")) { sqlite3_finalize(stmt); return false; }
     sqlite3_bind_int64(stmt, 2, batch_seq);
     sqlite3_bind_int64(stmt, 3, now_ns());
     sqlite3_bind_blob(stmt, 4, payload.data(), static_cast<int>(payload.size()), SQLITE_TRANSIENT);
-    int rc = sqlite3_step(stmt);
+    bool ok = step_done_checked(db_, stmt, "insert_batch");
     sqlite3_finalize(stmt);
-    return rc == SQLITE_DONE;
+    return ok;
 }
 
 void Spool::ack_batch(const std::string& run_id, int64_t batch_seq) {
     std::lock_guard<std::mutex> lk(mtx_);
     const char* sql =
         "UPDATE batches SET acked=1 WHERE run_id=? AND batch_seq=?";
-    sqlite3_stmt* stmt;
-    sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr);
-    sqlite3_bind_text(stmt, 1, run_id.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_stmt* stmt = prep_checked(db_, sql, "ack_batch");
+    if (!stmt) return;
+    if (!bind_text_checked(stmt, 1, run_id, "ack_batch")) { sqlite3_finalize(stmt); return; }
     sqlite3_bind_int64(stmt, 2, batch_seq);
-    sqlite3_step(stmt);
+    (void)step_done_checked(db_, stmt, "ack_batch");
     sqlite3_finalize(stmt);
 }
 
@@ -192,8 +231,8 @@ std::vector<BatchRow> Spool::fetch_unacked(size_t limit) const {
     const char* sql =
         "SELECT run_id, batch_seq, created_at, payload FROM batches "
         "WHERE acked=0 ORDER BY created_at ASC LIMIT ?";
-    sqlite3_stmt* stmt;
-    sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr);
+    sqlite3_stmt* stmt = prep_checked(db_, sql, "fetch_unacked");
+    if (!stmt) return {};
     sqlite3_bind_int64(stmt, 1, static_cast<int64_t>(limit));
     std::vector<BatchRow> rows;
     while (sqlite3_step(stmt) == SQLITE_ROW) {
@@ -215,10 +254,10 @@ void Spool::purge_acked(int64_t cutoff_ns) {
     std::lock_guard<std::mutex> lk(mtx_);
     const char* sql =
         "DELETE FROM batches WHERE acked=1 AND created_at < ?";
-    sqlite3_stmt* stmt;
-    sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr);
+    sqlite3_stmt* stmt = prep_checked(db_, sql, "purge_acked");
+    if (!stmt) return;
     sqlite3_bind_int64(stmt, 1, cutoff_ns);
-    sqlite3_step(stmt);
+    (void)step_done_checked(db_, stmt, "purge_acked");
     int deleted = sqlite3_changes(db_);
     sqlite3_finalize(stmt);
     if (deleted > 0) spdlog::debug("spool: purged {} acked result rows", deleted);
@@ -227,8 +266,8 @@ void Spool::purge_acked(int64_t cutoff_ns) {
 uint64_t Spool::result_bytes_used_locked() const {
     // mtx_ must already be held by caller.
     const char* sql = "SELECT COALESCE(SUM(LENGTH(payload)), 0) FROM batches WHERE acked=0";
-    sqlite3_stmt* stmt;
-    sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr);
+    sqlite3_stmt* stmt = prep_checked(db_, sql, "result_bytes_used");
+    if (!stmt) return 0;
     uint64_t total = 0;
     if (sqlite3_step(stmt) == SQLITE_ROW)
         total = static_cast<uint64_t>(sqlite3_column_int64(stmt, 0));
