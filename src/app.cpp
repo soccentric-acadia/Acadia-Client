@@ -183,14 +183,26 @@ bool App::init() {
     }
 
     // 2. Module registry
+    // Task 71: when a registry path is configured, a load failure is fatal
+    // (fail closed) — an empty registry would silently accept unknown modules
+    // and log-and-continue. Only a truly unset path (no registry) is allowed.
     registry_ = std::make_unique<ModuleRegistry>();
     if (!cfg_.modules_yaml_path.empty()) {
         try {
             int n = registry_->load(cfg_.modules_yaml_path);
             spdlog::info("app: loaded {} modules", n);
+            if (n == 0) {
+                spdlog::critical("app: module registry loaded 0 modules from {}",
+                                 cfg_.modules_yaml_path);
+                return false;
+            }
         } catch (const std::exception& e) {
-            spdlog::warn("app: module registry load failed: {} (continuing)", e.what());
+            spdlog::critical("app: module registry load FAILED (fail-closed): {}", e.what());
+            return false;
         }
+    } else {
+        spdlog::warn("app: no modules_yaml_path configured — registry is empty; "
+                     "module lookups will fail closed (explicit degraded mode)");
     }
 
     // 3. Stream client
