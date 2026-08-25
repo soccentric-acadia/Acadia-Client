@@ -62,6 +62,12 @@ public:
     // Fetch at most `limit` unacked rows, ordered by created_at asc.
     // Cursor-based: pass last seen created_at/batch_seq for pagination.
     std::vector<BatchRow> fetch_unacked(size_t limit = 32) const;
+    // Task 77: cursor-based replay — fetch unacked batches AFTER a durable
+    // cursor (created_at, batch_seq) so a large backlog resumes without
+    // starvation or duplicate replay from the oldest row every time.
+    std::vector<BatchRow> fetch_unacked_after(int64_t after_created_at,
+                                               int64_t after_seq,
+                                               size_t limit = 128) const;
 
     // Purge acked rows older than cutoff_ns (nanoseconds since epoch).
     void purge_acked(int64_t cutoff_ns);

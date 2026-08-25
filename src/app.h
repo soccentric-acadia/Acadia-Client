@@ -48,6 +48,11 @@ private:
     std::unique_ptr<Janitor>         janitor_;
     std::unique_ptr<DiagSocket>      diag_socket_;
 
+    // Task 77: durable cursor for cursor-based spool replay. Persisted so a
+    // large backlog resumes incrementally instead of always from the oldest row.
+    int64_t replay_cursor_created_at_{0};
+    int64_t replay_cursor_seq_{0};
+
     // HalService gRPC server — always-on inbound endpoint for PySDK.
     // Runs in hal_service_thread_; no DB writes on this path.
     std::unique_ptr<::grpc::Server> hal_service_server_;

@@ -250,6 +250,39 @@ std::vector<BatchRow> Spool::fetch_unacked(size_t limit) const {
     return rows;
 }
 
+std::vector<BatchRow> Spool::fetch_unacked_after(int64_t after_created_at,
+                                                   int64_t after_seq,
+                                                   size_t limit) const {
+    std::lock_guard<std::mutex> lk(mtx_);
+    // Cursor-based: resume strictly after (created_at, batch_seq). This avoids
+    // restarting from the oldest row on every replay pass (task 77), so a large
+    // backlog is drained incrementally without starvation or duplication.
+    const char* sql =
+        "SELECT run_id, batch_seq, created_at, payload FROM batches "
+        "WHERE acked=0 AND (created_at > ? OR (created_at = ? AND batch_seq > ?)) "
+        "ORDER BY created_at ASC, batch_seq ASC LIMIT ?";
+    sqlite3_stmt* stmt = prep_checked(db_, sql, "fetch_unacked_after");
+    if (!stmt) return {};
+    sqlite3_bind_int64(stmt, 1, after_created_at);
+    sqlite3_bind_int64(stmt, 2, after_created_at);
+    sqlite3_bind_int64(stmt, 3, after_seq);
+    sqlite3_bind_int64(stmt, 4, static_cast<int64_t>(limit));
+    std::vector<BatchRow> rows;
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        BatchRow r;
+        r.run_id     = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+        r.batch_seq  = sqlite3_column_int64(stmt, 1);
+        r.created_at = sqlite3_column_int64(stmt, 2);
+        const void* blob = sqlite3_column_blob(stmt, 3);
+        int bytes        = sqlite3_column_bytes(stmt, 3);
+        r.payload.assign(static_cast<const uint8_t*>(blob),
+                         static_cast<const uint8_t*>(blob) + bytes);
+        rows.push_back(std::move(r));
+    }
+    sqlite3_finalize(stmt);
+    return rows;
+}
+
 void Spool::purge_acked(int64_t cutoff_ns) {
     std::lock_guard<std::mutex> lk(mtx_);
     const char* sql =

@@ -295,3 +295,29 @@ TEST(RunOrchestrator, InvalidExecutionModeIsRejectedNotCompleted) {
 }
 
 } // namespace
+
+// ─── Task 77: cursor-based spool replay ──────────────────────────────────────
+
+TEST(SpoolCursor, ResumesAfterCursorWithoutDuplication) {
+    auto spool = make_mem_spool();
+    // Insert three batches for a backlog.
+    for (int64_t i = 0; i < 3; ++i) {
+        TestResultBatch b;
+        b.set_run_id("run_cursor");
+        b.set_batch_seq(i);
+        std::string bytes; b.SerializeToString(&bytes);
+        spool->insert_batch("run_cursor", i, Bytes(bytes.begin(), bytes.end()));
+    }
+    // First pass: fetch from cursor (0,0).
+    auto first = spool->fetch_unacked_after(0, 0, 128);
+    ASSERT_EQ(first.size(), 3u);
+    // Advance the cursor past the first row and fetch again — must NOT re-return
+    // the first row (no duplication / no starvation of later rows).
+    auto after_first = spool->fetch_unacked_after(first[0].created_at, first[0].batch_seq, 128);
+    ASSERT_EQ(after_first.size(), 2u);
+    EXPECT_EQ(after_first[0].batch_seq, 1);
+    EXPECT_EQ(after_first[1].batch_seq, 2);
+    // Fully drained.
+    auto after_last = spool->fetch_unacked_after(after_first[1].created_at, after_first[1].batch_seq, 128);
+    EXPECT_TRUE(after_last.empty());
+}
