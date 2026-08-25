@@ -298,9 +298,12 @@ bool Spool::insert_log(const std::string& run_id, int64_t batch_seq,
                         const Bytes& payload) {
     std::lock_guard<std::mutex> lk(mtx_);
     if (log_spool_full_locked()) {
-        // Drop oldest acked row
+        // Task 75: only evict the oldest ACKED row — unacknowledged data must
+        // be preserved. The previous query deleted any oldest row regardless of
+        // ack state, silently discarding undelivered logs.
         exec("DELETE FROM log_batches WHERE rowid = "
-             "(SELECT rowid FROM log_batches ORDER BY created_at ASC LIMIT 1)");
+             "(SELECT rowid FROM log_batches WHERE acked=1 "
+             " ORDER BY created_at ASC LIMIT 1)");
     }
     const char* sql =
         "INSERT OR REPLACE INTO log_batches(run_id, batch_seq, created_at, acked, payload) "
@@ -354,13 +357,15 @@ std::vector<LogRow> Spool::fetch_unacked_logs(size_t limit) const {
 
 void Spool::evict_oldest_logs(size_t n) {
     std::lock_guard<std::mutex> lk(mtx_);
+    // Task 75: evict only ACKED logs, oldest first, preserving unacknowledged.
     const char* sql =
         "DELETE FROM log_batches WHERE rowid IN "
-        "(SELECT rowid FROM log_batches ORDER BY created_at ASC LIMIT ?)";
-    sqlite3_stmt* stmt;
-    sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr);
+        "(SELECT rowid FROM log_batches WHERE acked=1 "
+        " ORDER BY created_at ASC LIMIT ?)";
+    sqlite3_stmt* stmt = prep_checked(db_, sql, "evict_oldest_logs");
+    if (!stmt) return;
     sqlite3_bind_int64(stmt, 1, static_cast<int64_t>(n));
-    sqlite3_step(stmt);
+    (void)step_done_checked(db_, stmt, "evict_oldest_logs");
     sqlite3_finalize(stmt);
 }
 
