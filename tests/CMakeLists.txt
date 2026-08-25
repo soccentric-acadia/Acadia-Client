@@ -56,3 +56,29 @@ target_link_libraries(test_run_orchestrator PRIVATE
 )
 
 add_test(NAME runner_tests COMMAND test_run_orchestrator)
+
+# ---------------------------------------------------------------------------
+# test_subsystems — task 79: registry, adapter dispatch, spool edge cases
+# ---------------------------------------------------------------------------
+
+add_executable(test_subsystems
+    test_subsystems.cc
+)
+
+target_include_directories(test_subsystems PRIVATE
+    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/../Acadia-HAL/src
+)
+
+target_link_libraries(test_subsystems PRIVATE
+    acadia_registry
+    acadia_spool
+    acadia_protos
+    spdlog::spdlog
+    SQLite::SQLite3
+    yaml-cpp::yaml-cpp
+    protobuf::libprotobuf
+    GTest::gtest_main
+)
+
+add_test(NAME subsystem_tests COMMAND test_subsystems)
