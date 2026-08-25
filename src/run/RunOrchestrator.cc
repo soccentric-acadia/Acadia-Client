@@ -227,7 +227,26 @@ void RunOrchestrator::flush_results(RunContext& ctx,
         std::this_thread::sleep_for(std::chrono::milliseconds(200));
     }
 
-    spool_.insert_batch(ctx.run_id, ctx.batch_seq, bytes);
+    // Task 73: propagate insert_batch failure — a full or oversized spool must
+    // surface as a FAILED run with operator-visible diagnostics, never a silent
+    // drop that leaves the batch un-acked.
+    if (!spool_.insert_batch(ctx.run_id, ctx.batch_seq, bytes)) {
+        spdlog::error("orchestrator: spool insert_batch FAILED for run_id={} seq={} "
+                      "(full or oversized); marking run failed",
+                      ctx.run_id, ctx.batch_seq);
+        spool_.upsert_run_state(ctx.run_id, static_cast<int>(RunState::FAILED),
+                                ctx.batch_seq);
+        ClientMessage err_msg;
+        auto* batch = err_msg.mutable_result_batch();
+        batch->set_run_id(ctx.run_id);
+        batch->set_batch_seq(ctx.batch_seq);
+        batch->set_module_id(ctx.module_id);
+        batch->set_mode(hal_bridge::execution_mode_from_int(ctx.mode));
+        batch->set_state(RunState::FAILED);
+        batch->set_terminal(true);
+        stream_.send(std::move(err_msg));
+        return;
+    }
     spool_.upsert_run_state(ctx.run_id, static_cast<int>(RunState::RUNNING),
                              ctx.batch_seq);
 
