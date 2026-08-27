@@ -48,7 +48,7 @@ SSH := $(SSHPASS) ssh -o StrictHostKeyChecking=no
 SCP := $(SSHPASS) scp -o StrictHostKeyChecking=no
 
 # Default target
-all: build ## Alias for docker-build (default)
+all: build ## Default target: native build (use docker-build for the ARM64 cross build)
 
 # Deploy to remote target: $(1)=IP address
 # Fails fast if no address or credentials were provided.
