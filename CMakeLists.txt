@@ -9,17 +9,30 @@ include(cmake/CompilerWarnings.cmake)
 include(GNUInstallDirs)
 
 # ---------------------------------------------------------------------------
-# HAL library (sibling directory) — must come before add_subdirectory(src)
-# so that the acu_full_test target is available when registry/CMakeLists.txt
-# links against it.
+# HAL library — prefer the installed SDK package; fall back to the sibling
+# source tree (used by the Docker cross-build, which mounts the parent Acadia/
+# directory). This yields the acadia-hal::acu_full_test target that the
+# HAL-backed adapters link against and that propagates the acadia_hal include
+# dir (so `#include "gpu_lib/gpu_lib.h"` resolves unchanged).
 # ---------------------------------------------------------------------------
 find_package(Threads REQUIRED)  # HAL requires Threads::Threads
 
-add_subdirectory(
-    ${CMAKE_SOURCE_DIR}/../Acadia-HAL
-    ${CMAKE_BINARY_DIR}/acadia_hal_build
-    EXCLUDE_FROM_ALL
-)
+set(HAL_LIB "")
+find_package(acadia-hal CONFIG QUIET)
+if(acadia-hal_FOUND)
+    message(STATUS "[acadia-client] HAL: using installed package acadia-hal")
+    set(HAL_LIB acadia-hal::acu_full_test)
+    get_target_property(HAL_INCLUDE_DIR acadia-hal::acu_full_test INTERFACE_INCLUDE_DIRECTORIES)
+else()
+    message(STATUS "[acadia-client] HAL: acadia-hal not installed, building from sibling source")
+    add_subdirectory(
+        ${CMAKE_SOURCE_DIR}/../Acadia-HAL
+        ${CMAKE_BINARY_DIR}/acadia_hal_build
+        EXCLUDE_FROM_ALL
+    )
+    set(HAL_LIB acu_full_test)
+    set(HAL_INCLUDE_DIR "${CMAKE_SOURCE_DIR}/../Acadia-HAL/src")
+endif()
 
 # ---------------------------------------------------------------------------
 # Dependencies

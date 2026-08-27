@@ -27,7 +27,7 @@ add_executable(acadia-client
 
 target_include_directories(acadia-client PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_SOURCE_DIR}/../Acadia-HAL/src
+    ${HAL_INCLUDE_DIR}
 )
 
 target_link_libraries(acadia-client PRIVATE

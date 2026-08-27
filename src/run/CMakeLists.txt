@@ -4,7 +4,7 @@ add_library(acadia_run STATIC
 
 target_include_directories(acadia_run PRIVATE
     ${CMAKE_SOURCE_DIR}/src
-    ${CMAKE_SOURCE_DIR}/../Acadia-HAL/src
+    ${HAL_INCLUDE_DIR}
 )
 
 target_link_libraries(acadia_run PRIVATE

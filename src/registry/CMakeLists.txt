@@ -64,13 +64,13 @@ add_library(acadia_registry STATIC
 
 target_include_directories(acadia_registry PRIVATE
     ${CMAKE_SOURCE_DIR}/src
-    ${CMAKE_SOURCE_DIR}/../Acadia-HAL/src
+    ${HAL_INCLUDE_DIR}
 )
 
-# acu_full_test is the combined HAL static library built by add_subdirectory
-# in the root CMakeLists.  PUBLIC propagates HAL includes to acadia-client.
+# HAL is linked either from the installed acadia-hal package or from the
+# sibling source tree (see root CMakeLists). PUBLIC propagates HAL includes.
 target_link_libraries(acadia_registry PUBLIC
-    acu_full_test
+    ${HAL_LIB}
 )
 target_link_libraries(acadia_registry PRIVATE
     acadia_protos
