@@ -195,9 +195,12 @@ void Spool::exec(const char* sql) {
 bool Spool::insert_batch(const std::string& run_id, int64_t batch_seq,
                           const Bytes& payload) {
     std::lock_guard<std::mutex> lk(mtx_);
-    if (result_spool_full_locked()) {
-        spdlog::warn("spool: result spool full, dropping batch run_id={} seq={}",
-                     run_id, batch_seq);
+    // X2-004/CLI-040: fail closed on the insert that would exceed the cap —
+    // the documented contract is "returns false if the spool cap WOULD be
+    // exceeded", not "refuse only when already full".
+    if (result_bytes_used_locked() + payload.size() > result_cap_) {
+        spdlog::warn("spool: result spool full, dropping batch run_id={} seq={} ({}+{} > {})",
+                     run_id, batch_seq, result_bytes_used_locked(), payload.size(), result_cap_);
         return false;
     }
     const char* sql =

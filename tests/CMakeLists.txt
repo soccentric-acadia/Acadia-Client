@@ -15,7 +15,7 @@ add_executable(test_result_serializer
 
 target_include_directories(test_result_serializer PRIVATE
     ${CMAKE_SOURCE_DIR}/src
-    ${CMAKE_SOURCE_DIR}/../Acadia-HAL/src
+    ${HAL_INCLUDE_DIR}
 )
 
 target_link_libraries(test_result_serializer PRIVATE
@@ -37,7 +37,7 @@ add_executable(test_run_orchestrator
 
 target_include_directories(test_run_orchestrator PRIVATE
     ${CMAKE_SOURCE_DIR}/src
-    ${CMAKE_SOURCE_DIR}/../Acadia-HAL/src
+    ${HAL_INCLUDE_DIR}
 )
 
 target_link_libraries(test_run_orchestrator PRIVATE
@@ -67,7 +67,7 @@ add_executable(test_subsystems
 
 target_include_directories(test_subsystems PRIVATE
     ${CMAKE_SOURCE_DIR}/src
-    ${CMAKE_SOURCE_DIR}/../Acadia-HAL/src
+    ${HAL_INCLUDE_DIR}
 )
 
 target_link_libraries(test_subsystems PRIVATE
@@ -82,3 +82,27 @@ target_link_libraries(test_subsystems PRIVATE
 )
 
 add_test(NAME subsystem_tests COMMAND test_subsystems)
+
+# ---------------------------------------------------------------------------
+# test_spool — CLI-040: offline spool semantics (insert/ack/replay/caps)
+# ---------------------------------------------------------------------------
+
+add_executable(test_spool
+    test_spool.cc
+)
+
+target_include_directories(test_spool PRIVATE
+    ${CMAKE_SOURCE_DIR}/src
+    ${HAL_INCLUDE_DIR}
+)
+
+target_link_libraries(test_spool PRIVATE
+    acadia_spool
+    acadia_protos
+    spdlog::spdlog
+    SQLite::SQLite3
+    protobuf::libprotobuf
+    GTest::gtest_main
+)
+
+add_test(NAME spool_tests COMMAND test_spool)
