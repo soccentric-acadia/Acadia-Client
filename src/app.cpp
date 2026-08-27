@@ -212,6 +212,7 @@ bool App::init() {
     scfg.tls_ca         = cfg_.tls_ca;
     scfg.tls_cert       = cfg_.tls_cert;
     scfg.tls_key        = cfg_.tls_key;
+    scfg.stream_token   = cfg_.server_stream_token;  // X2-003
 
     stream_ = std::make_unique<StreamClient>(scfg,
         [this](const ServerMessage& msg){ on_server_message(msg); });

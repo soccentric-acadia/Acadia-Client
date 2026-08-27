@@ -9,6 +9,11 @@
 server_address = "192.168.1.100"   # REQUIRED — IP or hostname of Acadia-Server
 server_port    = 50051
 
+# X2-003: shared stream token. MUST match the Server's ACADIA_STREAM_TOKEN when
+# the server requires one (empty = server runs in dev/open mode). The env var
+# ACADIA_SERVER_TOKEN overrides this value when set.
+server_stream_token = ""
+
 # ---------------------------------------------------------------------------
 # HalService listener (inbound — PySDK connects to this Client port)
 # No DB writes occur on this path (invariant 0.3 of the remediation plan).

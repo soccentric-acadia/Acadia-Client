@@ -1,4 +1,6 @@
 #include "config/client_config.h"
+
+#include <cstdlib>
 #include "config/client_id.h"
 
 #include <toml++/toml.hpp>
@@ -43,6 +45,12 @@ Result<ClientConfig> ClientConfig::load(const std::string& path) {
     }
     if (auto v = tbl["hal_service_bind"].value<std::string>()) { cfg.hal_service_bind = *v; }
     if (auto v = tbl["hal_service_auth_token"].value<std::string>()) { cfg.hal_service_auth_token = *v; }
+
+    // X2-003: stream token from conf, overridable via ACADIA_SERVER_TOKEN env.
+    if (auto v = tbl["server_stream_token"].value<std::string>()) { cfg.server_stream_token = *v; }
+    if (const char* env = std::getenv("ACADIA_SERVER_TOKEN"); env && *env) {
+        cfg.server_stream_token = env;
+    }
 
     if (auto v = tbl["spool_path"].value<std::string>())         { cfg.spool_path      = *v; }
     if (auto v = tbl["client_id_path"].value<std::string>())     { cfg.client_id_path  = *v; }

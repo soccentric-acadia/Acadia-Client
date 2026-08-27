@@ -36,6 +36,9 @@ struct StreamClientConfig {
     std::string tls_ca;    // empty = plaintext
     std::string tls_cert;
     std::string tls_key;
+    // X2-003: sent as `x-acadia-stream-token` metadata on every Connect call
+    // when non-empty; must match the Server's ACADIA_STREAM_TOKEN.
+    std::string stream_token;
     std::chrono::seconds max_backoff{30};
 };
 

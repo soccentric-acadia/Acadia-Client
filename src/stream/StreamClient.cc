@@ -76,6 +76,11 @@ void StreamClient::run_stream() {
     auto stub    = ClientService::NewStub(channel);
 
     grpc::ClientContext ctx;
+    // X2-003: present the shared stream token when configured. The server
+    // validates this metadata before any state is touched.
+    if (!cfg_.stream_token.empty()) {
+        ctx.AddMetadata("x-acadia-stream-token", cfg_.stream_token);
+    }
     auto stream = stub->Connect(&ctx);
 
     if (!stream) {

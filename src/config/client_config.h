@@ -12,6 +12,10 @@ struct ClientConfig {
     // gRPC server (outbound — connects to Acadia-Server)
     std::string server_address;
     uint16_t    server_port{50051};
+    // X2-003: shared stream token sent as `x-acadia-stream-token` metadata on
+    // the ClientService stream. Must match the Server's ACADIA_STREAM_TOKEN
+    // when the server requires it (empty = server runs in dev/open mode).
+    std::string server_stream_token;
 
     // HalService listener (inbound — PySDK connects here; no DB writes)
     // Task 70: secure by default. Bind defaults to loopback (127.0.0.1); set
