@@ -53,13 +53,20 @@ all: build ## Default target: native build (use docker-build for the ARM64 cross
 # Deploy to remote target: $(1)=IP address
 # Fails fast if no address or credentials were provided.
 _require_deploy_env = $(if $(strip $(1)),,$(error deploy requires an IP (set IP_A/IP_B or ACADIA_TARGET_ADDRESS)))
+# CLI-032: versioned deploy path (no more /tmp staging). Each deploy lands in
+# /opt/acadia/client/<version> with a SHA-256 manifest.
+CLIENT_VERSION := 0.1.0
+ACADIA_DEPLOY_ROOT ?= /opt/acadia/client
+DEPLOY_DIR := $(ACADIA_DEPLOY_ROOT)/$(CLIENT_VERSION)
+
 define deploy_remote
 	$(call _require_deploy_env,$(1))
 	$(if $(and $(PASS),$(SSHPASS)),,$(if $(ACADIA_TARGET_SSH_KEY),,$(error deploy: no SSH credentials configured; set ACADIA_TARGET_SSH_KEY or ACADIA_TARGET_USER/ACADIA_TARGET_PASS)))
 	@echo "Deploying to $(1)..."
-	$(SSH) $(USER)@$(1) "rm -rf /tmp/acu-test && mkdir -p /tmp/acu-test"
-	$(SCP) -r $(CROSS_BUILD_DIR)/lib $(USER)@$(1):/tmp/acu-test/
-	$(SCP) -r $(CROSS_BUILD_DIR)/bin $(USER)@$(1):/tmp/acu-test/
+	$(SSH) $(USER)@$(1) "rm -rf $(DEPLOY_DIR) && mkdir -p $(DEPLOY_DIR)"
+	$(SCP) -r $(CROSS_BUILD_DIR)/lib $(USER)@$(1):$(DEPLOY_DIR)/
+	$(SCP) -r $(CROSS_BUILD_DIR)/bin $(USER)@$(1):$(DEPLOY_DIR)/
+	$(SSH) $(USER)@$(1) "cd $(DEPLOY_DIR) && find . -type f -not -name MANIFEST -exec sha256sum {} \; | sed 's|  \./|  |' > MANIFEST && echo 'version: $(CLIENT_VERSION)' >> MANIFEST && date -u '+deployed: %Y-%m-%dT%H:%M:%SZ' >> MANIFEST"
 endef
 
 # Run apps on remote target: $(1)=IP address
@@ -69,13 +76,13 @@ define run_remote
 	ARGS="$(wordlist 3, $(words $(MAKECMDGOALS)), $(MAKECMDGOALS))"; \
 	if [ -z "$$APP" ]; then \
 		echo "Running all test applications on $(1)..."; \
-		for name in $$($(SSH) $(USER)@$(1) "ls /tmp/acu-test/bin/"); do \
+		for name in $$($(SSH) $(USER)@$(1) "ls $(DEPLOY_DIR)/bin/"); do \
 			echo "--- Running $$name ---"; \
-			$(SSH) $(USER)@$(1) "cd /tmp/acu-test && ./bin/$$name" || true; \
+			$(SSH) $(USER)@$(1) "cd $(DEPLOY_DIR) && ./bin/$$name" || true; \
 		done; \
 	else \
 		echo "Running $$APP on $(1) with args: $$ARGS"; \
-		$(SSH) $(USER)@$(1) "cd /tmp/acu-test && ./bin/$$APP $$ARGS"; \
+		$(SSH) $(USER)@$(1) "cd $(DEPLOY_DIR) && ./bin/$$APP $$ARGS"; \
 	fi
 endef
 
