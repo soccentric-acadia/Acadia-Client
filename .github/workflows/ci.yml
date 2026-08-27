@@ -60,6 +60,16 @@ jobs:
       - name: Build
         run: ninja -C build -j$(nproc)
 
+      - name: No generated code in working tree (X1-002)
+        run: |
+          dirty=$(git status --porcelain)
+          if [ -n "$dirty" ]; then
+            echo "Build produced untracked/modified files — generated code must stay out of git:"
+            echo "$dirty"
+            exit 1
+          fi
+          echo "clean: build produced no tracked changes"
+
       - name: Test (Client's own tests only)
         run: ctest --test-dir build -j$(nproc) --output-on-failure -R "serializer_tests|runner_tests|subsystem_tests"
 
