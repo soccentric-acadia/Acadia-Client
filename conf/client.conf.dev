@@ -1,3 +1,6 @@
+# Local development Server endpoint for the outbound acadia.stream connection.
+server_address = "127.0.0.1:50051"
+
 # Acadia-Client development configuration
 # Local development version with paths that don't require root
 

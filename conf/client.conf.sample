@@ -1,3 +1,7 @@
+# Server endpoint for the outbound acadia.stream control/result connection.
+server_address = "127.0.0.1:50051"
+# Environment override: ACADIA_SERVER_ADDRESS
+
 # Acadia-Client sample configuration
 # Copy to /etc/acadia/client.conf and edit before starting the daemon.
 # All fields shown with their default values unless marked REQUIRED.
