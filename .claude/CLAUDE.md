@@ -6,4 +6,4 @@ Acadia Client is the C++17 gRPC client component for Acadia devices.
 
 ## Build instructions
 
-Run `make build` to build in Docker, or `make test` to run the Docker test suite.
+Run `make build` for a native build, or `make test` to build and run the tests.

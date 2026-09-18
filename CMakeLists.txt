@@ -10,8 +10,7 @@ include(GNUInstallDirs)
 
 # ---------------------------------------------------------------------------
 # HAL library — prefer the installed SDK package; fall back to the sibling
-# source tree (used by the Docker cross-build, which mounts the parent Acadia/
-# directory). This yields the acadia-hal::acu_full_test target that the
+# source tree. This yields the acadia-hal::acu_full_test target that the
 # HAL-backed adapters link against and that propagates the acadia_hal include
 # dir (so `#include "gpu_lib/gpu_lib.h"` resolves unchanged).
 # ---------------------------------------------------------------------------
