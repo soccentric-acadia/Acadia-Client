@@ -62,7 +62,13 @@ find_package(gRPC CONFIG QUIET)
 if(gRPC_FOUND)
   message(STATUS "[acadia-client] gRPC ${gRPC_VERSION} via CMake config")
   set(ACADIA_GRPC_LIBRARIES gRPC::grpc++ gRPC::grpc)
-  get_target_property(GRPC_CPP_PLUGIN gRPC::grpc_cpp_plugin LOCATION)
+  # gRPCConfig.cmake skips gRPCPluginTargets.cmake when CMAKE_CROSSCOMPILING
+  # (e.g. Yocto), so the imported target does not exist there and an
+  # unconditional get_target_property() fatal-errors.  Guard it; the
+  # find_program() below then locates the host-native plugin via PATH.
+  if(TARGET gRPC::grpc_cpp_plugin)
+    get_target_property(GRPC_CPP_PLUGIN gRPC::grpc_cpp_plugin LOCATION)
+  endif()
   get_filename_component(GRPC_BIN_DIR "${GRPC_CPP_PLUGIN}" DIRECTORY)
   find_program(GRPC_CPP_PLUGIN grpc_cpp_plugin
     HINTS "${GRPC_BIN_DIR}" /usr/local/bin /usr/bin
