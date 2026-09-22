@@ -5,6 +5,7 @@
 #include "debug_and_development_interfaces/debug_and_development_interfaces.h"
 
 #include <algorithm>
+#include "registry/AdapterConfig.h"
 
 namespace acadia::client {
 
@@ -13,8 +14,14 @@ DebugAndDevelopmentInterfacesAdapter::~DebugAndDevelopmentInterfacesAdapter() = 
 
 std::vector<hal::TestResult> DebugAndDevelopmentInterfacesAdapter::run(int mode,
                                                       const std::vector<uint8_t>& config_bytes) {
-    (void)config_bytes;
-    auto test_names = hal_->getAvailableTests();
+    AdapterRunConfig rc;
+    if (!decode_adapter_config("debug_and_development_interfaces", config_bytes, rc)) {
+        // CLI-160: a malformed config must surface as an ERROR result,
+        // never fall back to HAL defaults.
+        return {make_config_error_result("debug_and_development_interfaces", "unparseable module config")};
+    }
+    apply_adapter_config(*hal_, rc);  // HAL-001: push config into the module
+    auto test_names = select_adapter_tests(hal_->getAvailableTests(), rc);
     auto results    = hal_->runSelectedTests(test_names);
     for (auto& r : results) {
         if (r.module_id.empty()) r.module_id = "debug_and_development_interfaces";

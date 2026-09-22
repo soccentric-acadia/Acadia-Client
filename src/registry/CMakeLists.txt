@@ -1,6 +1,7 @@
 add_library(acadia_registry STATIC
     ModuleRegistry.cc
     AdapterRegistry.cc
+    AdapterConfig.cc
     # ── HAL-backed adapters (all 54 modules with HAL source) ────────────────
     adapters/audio_interfaces_adapter.cc
     adapters/camera_interfaces_adapter.cc

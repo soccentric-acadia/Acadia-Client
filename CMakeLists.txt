@@ -128,6 +128,11 @@ set(EXECUTABLE_OUTPUT_PATH "${MAINFOLDER}/bin")
 set(LIBRARY_OUTPUT_PATH "${MAINFOLDER}/lib")
 
 # Generated sources
+file(GLOB ACADIA_MODULE_PROTO_FILES ${PROTO_DIR}/modules/*.proto)
+
+# CLI-160: the module Config/Result protos are compiled into the client so the
+# generated descriptor pool can decode per-module configs at runtime
+# (see registry/AdapterConfig.cc).
 set(PROTO_SRCS
     ${PROTO_GEN_DIR}/common.pb.cc
     ${PROTO_GEN_DIR}/hal_service.pb.cc
@@ -136,8 +141,17 @@ set(PROTO_SRCS
     ${PROTO_GEN_DIR}/client_service.grpc.pb.cc
 )
 
+# protoc outputs mirror the input path relative to proto_path, so each
+# modules/<id>.proto becomes proto_gen/modules/<id>.pb.cc.
+set(MODULE_PROTO_OUTPUTS)
+foreach(_p ${ACADIA_MODULE_PROTO_FILES})
+    file(RELATIVE_PATH _rel "${PROTO_DIR}" "${_p}")
+    string(REGEX REPLACE "\\.proto$" ".pb.cc" _cc "${_rel}")
+    list(APPEND MODULE_PROTO_OUTPUTS "${PROTO_GEN_DIR}/${_cc}")
+endforeach()
+
 add_custom_command(
-    OUTPUT ${PROTO_SRCS}
+    OUTPUT ${PROTO_SRCS} ${MODULE_PROTO_OUTPUTS}
     COMMAND ${PROTOC_EXECUTABLE}
         --proto_path=${PROTO_DIR}
         --cpp_out=${PROTO_GEN_DIR}
@@ -146,10 +160,12 @@ add_custom_command(
         ${PROTO_DIR}/common.proto
         ${PROTO_DIR}/hal_service.proto
         ${PROTO_DIR}/client_service.proto
+        ${ACADIA_MODULE_PROTO_FILES}
     DEPENDS
         ${PROTO_DIR}/common.proto
         ${PROTO_DIR}/hal_service.proto
         ${PROTO_DIR}/client_service.proto
+        ${ACADIA_MODULE_PROTO_FILES}
     VERBATIM
 )
 
