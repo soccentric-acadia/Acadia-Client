@@ -50,6 +50,12 @@ private:
     std::string         run_id_{"_system"};
     std::mutex          run_id_mtx_;
     int64_t             batch_seq_ = 0;
+
+    // CLI-135: keep a single /dev/kmsg file description across flushes so the
+    // kernel-log read position persists (opening per flush rewinds to the start
+    // of the ring buffer and re-ships the entire log every second).
+    int                 kmsg_fd_ = -1;
+    std::string         kmsg_line_remainder_;
 };
 
 } // namespace acadia::client

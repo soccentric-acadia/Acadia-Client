@@ -5,6 +5,8 @@
 #include <spdlog/spdlog.h>
 
 #include <fcntl.h>
+#include <unistd.h>
+#include <cerrno>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
@@ -25,6 +27,11 @@ LogCollector::LogCollector(Spool& spool, StreamClient& stream,
 
 LogCollector::~LogCollector() {
     stop();
+    // CLI-135: release the persistent /dev/kmsg descriptor.
+    if (kmsg_fd_ >= 0) {
+        ::close(kmsg_fd_);
+        kmsg_fd_ = -1;
+    }
 }
 
 void LogCollector::start() {
@@ -64,27 +71,46 @@ void LogCollector::collect_loop() {
 // /dev/kmsg reader (kernel log)
 // ---------------------------------------------------------------------------
 
+// CLI-135: /dev/kmsg is opened once and kept open; the per-file-description
+// read position persists across reads, so each flush only ships records that
+// arrived since the previous flush. Opening per flush would rewind to the
+// start of the ring buffer and re-ship the whole kernel log every second.
 void LogCollector::flush_kmsg() {
-    // Open non-blocking so we don't stall on empty ring buffer
-    FILE* f = fopen("/dev/kmsg", "r");
-    if (!f) return;
-
-    // Set non-blocking
-    int fd = fileno(f);
-    if (fd >= 0) {
-        int flags = fcntl(fd, F_GETFL, 0);
-        fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+    if (kmsg_fd_ < 0) {
+        kmsg_fd_ = open("/dev/kmsg", O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+        if (kmsg_fd_ < 0) return; // not available (e.g. host dev box)
+        // Skip everything already in the ring buffer: start at the end so we
+        // only collect records appended after the collector started.
+        lseek(kmsg_fd_, 0, SEEK_END);
     }
 
     std::vector<std::string> lines;
     char buf[4096];
-    while (fgets(buf, sizeof(buf), f)) {
-        size_t len = strlen(buf);
-        if (len > 0 && buf[len-1] == '\n') buf[len-1] = '\0';
-        lines.emplace_back(buf);
+    std::string pending = std::move(kmsg_line_remainder_);
+    kmsg_line_remainder_.clear();
+
+    while (lines.size() < cfg_.batch_max_lines) {
+        ssize_t n = ::read(kmsg_fd_, buf, sizeof(buf));
+        if (n <= 0) {
+            if (n < 0 && (errno == EINTR)) continue;
+            break; // EAGAIN (empty) or EOF — nothing new
+        }
+        for (ssize_t i = 0; i < n; ++i) {
+            char c = buf[i];
+            if (c == '\n') {
+                if (!pending.empty()) lines.push_back(pending);
+                pending.clear();
+                if (lines.size() >= cfg_.batch_max_lines) break;
+            } else {
+                pending.push_back(c);
+            }
+        }
         if (lines.size() >= cfg_.batch_max_lines) break;
     }
-    fclose(f);
+
+    // Keep an unterminated tail for the next flush instead of dropping it.
+    if (lines.size() >= cfg_.batch_max_lines && !pending.empty())
+        kmsg_line_remainder_ = std::move(pending);
 
     if (!lines.empty()) {
         std::string rid;
