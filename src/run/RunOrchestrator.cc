@@ -72,6 +72,22 @@ void RunOrchestrator::on_start(const std::string& run_id) {
     }
     const ConfigureRun& cfg = it->second;
 
+    // CLI-082: reject a duplicate StartRun for a run_id that is already live.
+    // Overwriting an existing entry whose worker thread is joinable would
+    // invoke std::terminate (thread move-assign), crashing the whole client.
+    if (runs_.find(run_id) != runs_.end()) {
+        spdlog::error("orchestrator: duplicate StartRun rejected for live run_id={}",
+                      run_id);
+        spool_.upsert_run_state(run_id, static_cast<int>(RunState::FAILED), 0);
+        ClientMessage err_msg;
+        auto* ack = err_msg.mutable_configure_ack();
+        ack->set_run_id(run_id);
+        ack->set_ok(false);
+        ack->set_error("duplicate run_id already running");
+        stream_.send(std::move(err_msg));
+        return;
+    }
+
     auto ctx = std::make_shared<RunContext>();
     ctx->run_id    = run_id;
     ctx->module_id = cfg.module_id();
