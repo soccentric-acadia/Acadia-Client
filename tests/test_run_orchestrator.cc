@@ -305,17 +305,18 @@ TEST(SpoolCursor, ResumesAfterCursorWithoutDuplication) {
         std::string bytes; b.SerializeToString(&bytes);
         spool->insert_batch("run_cursor", i, Bytes(bytes.begin(), bytes.end()));
     }
-    // First pass: fetch from cursor (0,0).
-    auto first = spool->fetch_unacked_after(0, 0, 128);
+    // First pass: fetch from cursor 0 (no rows seen yet).
+    auto first = spool->fetch_unacked_after(0, 128);
     ASSERT_EQ(first.size(), 3u);
-    // Advance the cursor past the first row and fetch again — must NOT re-return
-    // the first row (no duplication / no starvation of later rows).
-    auto after_first = spool->fetch_unacked_after(first[0].created_at, first[0].batch_seq, 128);
+    // Advance the cursor past the first row (ins_seq — CLI-080) and fetch
+    // again — must NOT re-return the first row (no duplication / no starvation
+    // of later rows).
+    auto after_first = spool->fetch_unacked_after(first[0].ins_seq, 128);
     ASSERT_EQ(after_first.size(), 2u);
     EXPECT_EQ(after_first[0].batch_seq, 1);
     EXPECT_EQ(after_first[1].batch_seq, 2);
     // Fully drained.
-    auto after_last = spool->fetch_unacked_after(after_first[1].created_at, after_first[1].batch_seq, 128);
+    auto after_last = spool->fetch_unacked_after(after_first[1].ins_seq, 128);
     EXPECT_TRUE(after_last.empty());
 }
 

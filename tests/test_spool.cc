@@ -66,11 +66,10 @@ TEST_F(SpoolTest, CursorReplayResumesWithoutDuplication) {
     Spool spool{db_path};
     for (int i = 1; i <= 5; ++i) ASSERT_TRUE(spool.insert_batch("run-1", i, {1}));
 
-    auto first_page = spool.fetch_unacked_after(0, 0, 2);
+    auto first_page = spool.fetch_unacked_after(0, 2);
     ASSERT_EQ(first_page.size(), 2u);
-    // Resume from the last row of the first page.
-    auto second_page = spool.fetch_unacked_after(
-        first_page.back().created_at, first_page.back().batch_seq, 128);
+    // Resume from the last row of the first page (ins_seq cursor — CLI-080).
+    auto second_page = spool.fetch_unacked_after(first_page.back().ins_seq, 128);
     ASSERT_EQ(second_page.size(), 3u);
     EXPECT_EQ(second_page.front().batch_seq, 3);
     EXPECT_EQ(second_page.back().batch_seq, 5);

@@ -4,6 +4,7 @@
 
 #include "registry/ModuleRegistry.h"
 #include "registry/AdapterRegistry.h"
+#include "registry/ModePolicy.h"
 #include "spool/Spool.h"
 
 #include "client_service.pb.h"
@@ -92,6 +93,37 @@ TEST(AdapterRegistry, InvalidModeFromAdapterIsError) {
     auto res = reg.invoke("testmod", 99, {});
     ASSERT_EQ(res.size(), 1u);
     EXPECT_EQ(res[0].output.status, hal::Status::ERROR);
+}
+
+// ─── CLI-118: execution-mode policy against modules.yaml `modes` ────────────
+
+TEST(ModePolicy, EmptyDeclaredListAcceptsAnyKnownMode) {
+    EXPECT_TRUE(mode_supported({}, hal::common::SINGLE_SHOT));
+    EXPECT_TRUE(mode_supported({}, hal::common::LONG_TERM));
+    EXPECT_TRUE(mode_supported({}, hal::common::MONITORING));
+    EXPECT_TRUE(mode_supported({}, hal::common::EVENT_BASED));
+}
+
+TEST(ModePolicy, DeclaredModeAccepted) {
+    const std::vector<std::string> declared{"SINGLE_SHOT"};
+    EXPECT_TRUE(mode_supported(declared, hal::common::SINGLE_SHOT));
+    EXPECT_FALSE(mode_supported(declared, hal::common::LONG_TERM));
+    EXPECT_FALSE(mode_supported(declared, hal::common::MONITORING));
+    EXPECT_FALSE(mode_supported(declared, hal::common::EVENT_BASED));
+}
+
+TEST(ModePolicy, CaseInsensitiveAndLegacyAliases) {
+    const std::vector<std::string> lower{"single_shot"};
+    EXPECT_TRUE(mode_supported(lower, hal::common::SINGLE_SHOT));
+    const std::vector<std::string> legacy{"ONE_SHOT"};
+    EXPECT_TRUE(mode_supported(legacy, hal::common::SINGLE_SHOT));
+    const std::vector<std::string> event_alias{"EVENT"};
+    EXPECT_TRUE(mode_supported(event_alias, hal::common::EVENT_BASED));
+}
+
+TEST(ModePolicy, UnspecifiedModeNeverAccepted) {
+    EXPECT_FALSE(mode_supported({}, hal::common::EXECUTION_MODE_UNSPECIFIED));
+    EXPECT_FALSE(mode_supported({"SINGLE_SHOT"}, hal::common::EXECUTION_MODE_UNSPECIFIED));
 }
 
 // ─── Spool edge cases ────────────────────────────────────────────────────────

@@ -5,6 +5,7 @@
 
 #include "hal_service/HalServiceImpl.h"
 #include "hal_bridge/ResultSerializer.h"
+#include "registry/ModePolicy.h"
 
 #include <google/protobuf/any.pb.h>
 #include <spdlog/spdlog.h>
@@ -116,6 +117,30 @@ static std::vector<uint8_t> module_config_bytes(const google::protobuf::Any& any
     return ::grpc::Status::OK;
 }
 
+::grpc::Status HalServiceImpl::validate_mode(
+    const std::string&         module_id,
+    hal::common::ExecutionMode mode)
+{
+    const auto& names = acadia::client::detail::mode_names(mode);
+    if (names.empty())
+        return {::grpc::StatusCode::INVALID_ARGUMENT,
+                "unsupported execution mode: " + std::to_string(static_cast<int>(mode))};
+    for (const auto& m : module_reg_.all()) {
+        if (m.id != module_id) continue;
+        if (m.modes.empty())
+            return ::grpc::Status::OK;  // no restriction declared
+        if (!acadia::client::mode_supported(m.modes, mode))
+            return {::grpc::StatusCode::INVALID_ARGUMENT,
+                    "module '" + module_id + "' does not support execution mode " +
+                    names.front() + " (declared modes: " +
+                    [&] { std::string s; for (auto& d : m.modes) { if (!s.empty()) s += ","; s += d; } return s; }() +
+                    ")"};
+        return ::grpc::Status::OK;
+    }
+    // Module not listed in modules.yaml — no declared restriction known.
+    return ::grpc::Status::OK;
+}
+
 // static
 hal::common::ResultEnvelope HalServiceImpl::make_envelope(
     const std::string&         module_id,
@@ -186,6 +211,8 @@ HalServiceImpl::find_sessions(const std::string& module_id,
     if (auto st = require_auth(ctx, auth_token_); !st.ok()) return st;
     auto st = validate_module(req->module_id());
     if (!st.ok()) return st;
+    if (auto mst = validate_mode(req->module_id(), hal::common::SINGLE_SHOT); !mst.ok())
+        return mst;  // CLI-118
 
     spdlog::info("hal_service: RunSingleShot module_id={}", req->module_id());
 
@@ -232,6 +259,8 @@ HalServiceImpl::find_sessions(const std::string& module_id,
     if (auto st = require_auth(ctx, auth_token_); !st.ok()) return st;
     auto st = validate_module(req->module_id());
     if (!st.ok()) return st;
+    if (auto mst = validate_mode(req->module_id(), hal::common::LONG_TERM); !mst.ok())
+        return mst;  // CLI-118
 
     // CLI-106: enforce a floor — the HAL must never be hammered at 1 kHz.
     int interval_ms = req->common().interval_ms() > 0
@@ -263,6 +292,8 @@ HalServiceImpl::find_sessions(const std::string& module_id,
     if (auto st = require_auth(ctx, auth_token_); !st.ok()) return st;
     auto st = validate_module(req->module_id());
     if (!st.ok()) return st;
+    if (auto mst = validate_mode(req->module_id(), hal::common::MONITORING); !mst.ok())
+        return mst;  // CLI-118
 
     int interval_ms = req->common().interval_ms() > 0
                           ? req->common().interval_ms()
@@ -293,6 +324,8 @@ HalServiceImpl::find_sessions(const std::string& module_id,
     if (auto st = require_auth(ctx, auth_token_); !st.ok()) return st;
     auto st = validate_module(req->module_id());
     if (!st.ok()) return st;
+    if (auto mst = validate_mode(req->module_id(), hal::common::EVENT_BASED); !mst.ok())
+        return mst;  // CLI-118
 
     int poll_ms = req->common().poll_interval_ms() > 0
                       ? req->common().poll_interval_ms()

@@ -93,6 +93,11 @@ private:
     // Validate a module_id against the registry.
     ::grpc::Status validate_module(const std::string& module_id);
 
+    // CLI-118: validate the requested execution mode against the module's
+    // declared `modes` list from modules.yaml (restriction only when non-empty).
+    ::grpc::Status validate_mode(const std::string&         module_id,
+                                 hal::common::ExecutionMode mode);
+
     // Build a ResultEnvelope from one hal::TestResult.
     static hal::common::ResultEnvelope make_envelope(
         const std::string&         module_id,
