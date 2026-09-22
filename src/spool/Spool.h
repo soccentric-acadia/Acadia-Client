@@ -12,9 +12,11 @@
 #include <functional>
 #include <mutex>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 struct sqlite3;
+struct sqlite3_stmt;
 
 namespace acadia::client {
 
@@ -24,7 +26,8 @@ using Bytes = std::vector<uint8_t>;
 struct BatchRow {
     std::string run_id;
     int64_t     batch_seq   = 0;
-    int64_t     created_at  = 0;  // nanoseconds since epoch
+    int64_t     created_at  = 0;   // nanoseconds since epoch (display only)
+    int64_t     ins_seq     = 0;   // CLI-080: monotonic insertion sequence
     Bytes       payload;
 };
 
@@ -60,13 +63,11 @@ public:
     void ack_batch(const std::string& run_id, int64_t batch_seq);
 
     // Fetch at most `limit` unacked rows, ordered by created_at asc.
-    // Cursor-based: pass last seen created_at/batch_seq for pagination.
     std::vector<BatchRow> fetch_unacked(size_t limit = 32) const;
-    // Task 77: cursor-based replay — fetch unacked batches AFTER a durable
-    // cursor (created_at, batch_seq) so a large backlog resumes without
-    // starvation or duplicate replay from the oldest row every time.
-    std::vector<BatchRow> fetch_unacked_after(int64_t after_created_at,
-                                               int64_t after_seq,
+    // Task 77 + CLI-080: cursor-based replay over the MONOTONIC insertion
+    // sequence (ins_seq) so wall-clock jumps (NTP/RTC reset at boot) cannot
+    // reorder the replay; the cursor is the last seen ins_seq.
+    std::vector<BatchRow> fetch_unacked_after(int64_t after_ins_seq,
                                                size_t limit = 128) const;
 
     // Purge acked rows older than cutoff_ns (nanoseconds since epoch).
@@ -119,7 +120,7 @@ public:
     // Current schema version.  Increment when the payload format changes
     // incompatibly (e.g. the HAL refactor that replaced passed/data with
     // the new TestResult shape).
-    static constexpr int kCurrentSchemaVersion = 2;
+    static constexpr int kCurrentSchemaVersion = 3;
 
     // Returns the schema version stored in the database, or 0 if absent.
     int stored_schema_version() const;
@@ -149,6 +150,11 @@ private:
     static void quarantine_corrupt(const std::string& path);
     bool        migrate(int from_version);
     bool        exec_nothrow(const char* sql);
+
+    // CLI-078: prepared-statement cache (all DB calls hold mtx_, so reuse is
+    // safe). Finalized on destruction.
+    sqlite3_stmt* cached_prepare(const char* sql, const char* what) const;
+    mutable std::unordered_map<std::string, sqlite3_stmt*> stmt_cache_;
 
 public:
     // Task 76: expose the CONFIGURED capacity (not a derived value) so the

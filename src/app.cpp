@@ -418,8 +418,7 @@ void App::send_unacked_replay() {
     // Task 77: cursor-based replay — resume from the durable cursor so a large
     // backlog is drained incrementally without re-sending the oldest rows on
     // every pass (no starvation, no duplication).
-    auto batches = spool_->fetch_unacked_after(replay_cursor_created_at_,
-                                                replay_cursor_seq_, 128);
+    auto batches = spool_->fetch_unacked_after(replay_cursor_ins_seq_, 128);
     if (batches.empty()) return;
     spdlog::info("app: replaying {} unacked batches from cursor", batches.size());
     for (const auto& row : batches) {
@@ -434,8 +433,7 @@ void App::send_unacked_replay() {
         *msg.mutable_result_batch() = std::move(batch);
         stream_.get()->send(std::move(msg));
         // Advance the durable cursor past this row.
-        replay_cursor_created_at_ = row.created_at;
-        replay_cursor_seq_        = row.batch_seq;
+        replay_cursor_ins_seq_    = row.ins_seq;
     }
 }
 

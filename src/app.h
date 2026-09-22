@@ -52,8 +52,7 @@ private:
 
     // Task 77: durable cursor for cursor-based spool replay. Persisted so a
     // large backlog resumes incrementally instead of always from the oldest row.
-    int64_t replay_cursor_created_at_{0};
-    int64_t replay_cursor_seq_{0};
+    int64_t replay_cursor_ins_seq_{0};  // CLI-080: monotonic cursor
 
     // HalService gRPC server — always-on inbound endpoint for PySDK.
     // Runs in hal_service_thread_; no DB writes on this path.

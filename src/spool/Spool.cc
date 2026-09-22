@@ -209,6 +209,11 @@ Spool::Spool(const std::string& path, uint64_t result_cap, uint64_t log_cap)
 }
 
 Spool::~Spool() {
+    for (auto& [sql, stmt] : stmt_cache_) {
+        (void)sql;
+        sqlite3_finalize(stmt);
+    }
+    stmt_cache_.clear();
     if (db_) sqlite3_close(db_);
 }
 
@@ -228,10 +233,11 @@ void Spool::apply_schema() {
             batch_seq  INTEGER NOT NULL,
             created_at INTEGER NOT NULL,
             acked      INTEGER NOT NULL DEFAULT 0,
+            ins_seq    INTEGER NOT NULL DEFAULT 0,  -- CLI-080: monotonic order
             payload    BLOB    NOT NULL,
             PRIMARY KEY (run_id, batch_seq)
         );
-        CREATE INDEX IF NOT EXISTS idx_unacked ON batches(acked, created_at);
+        CREATE INDEX IF NOT EXISTS idx_unacked ON batches(acked, ins_seq);
 
         CREATE TABLE IF NOT EXISTS log_batches (
             run_id     TEXT    NOT NULL,
@@ -258,8 +264,9 @@ static BatchRow decode_batch_row(sqlite3_stmt* stmt) {
     r.run_id     = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
     r.batch_seq  = sqlite3_column_int64(stmt, 1);
     r.created_at = sqlite3_column_int64(stmt, 2);
-    const void* blob = sqlite3_column_blob(stmt, 3);
-    int bytes        = sqlite3_column_bytes(stmt, 3);
+    r.ins_seq    = sqlite3_column_int64(stmt, 3);
+    const void* blob = sqlite3_column_blob(stmt, 4);
+    int bytes        = sqlite3_column_bytes(stmt, 4);
     r.payload.assign(static_cast<const uint8_t*>(blob),
                      static_cast<const uint8_t*>(blob) + bytes);
     return r;
@@ -311,17 +318,30 @@ bool Spool::insert_batch(const std::string& run_id, int64_t batch_seq,
     // CLI-074: plain INSERT — a repeated (run_id, batch_seq) is a real bug
     // (seq reset after restart) and must fail loudly, never silently overwrite
     // an existing UNACKED batch.
+    // CLI-080: ins_seq is a monotonically increasing insertion counter, immune
+    // to wall-clock jumps.
+    int64_t ins_seq = 0;
+    {
+        sqlite3_stmt* ms = prep_checked(db_, "SELECT COALESCE(MAX(ins_seq), 0) FROM batches", "next_ins_seq");
+        if (ms) {
+            if (sqlite3_step(ms) == SQLITE_ROW)
+                ins_seq = sqlite3_column_int64(ms, 0) + 1;
+            sqlite3_finalize(ms);
+        }
+    }
     const char* sql =
-        "INSERT INTO batches(run_id, batch_seq, created_at, acked, payload) "
-        "VALUES (?, ?, ?, 0, ?)";
-    sqlite3_stmt* stmt = prep_checked(db_, sql, "insert_batch");
+        "INSERT INTO batches(run_id, batch_seq, created_at, ins_seq, acked, payload) "
+        "VALUES (?, ?, ?, ?, 0, ?)";
+    sqlite3_stmt* stmt = cached_prepare(sql, "insert_batch");
     if (!stmt) return false;
-    if (!bind_text_checked(stmt, 1, run_id, "insert_batch")) { sqlite3_finalize(stmt); return false; }
+    sqlite3_reset(stmt);
+    sqlite3_clear_bindings(stmt);
+    if (!bind_text_checked(stmt, 1, run_id, "insert_batch")) return false;
     sqlite3_bind_int64(stmt, 2, batch_seq);
     sqlite3_bind_int64(stmt, 3, now_ns());
-    sqlite3_bind_blob(stmt, 4, payload.data(), static_cast<int>(payload.size()), SQLITE_TRANSIENT);
+    sqlite3_bind_int64(stmt, 4, ins_seq);
+    sqlite3_bind_blob(stmt, 5, payload.data(), static_cast<int>(payload.size()), SQLITE_TRANSIENT);
     bool ok = step_done_checked(db_, stmt, "insert_batch");
-    sqlite3_finalize(stmt);
     if (ok) {
         // CLI-062: keep the running byte counter in sync.
         result_bytes_cached_ += payload.size();
@@ -347,22 +367,26 @@ void Spool::ack_batch(const std::string& run_id, int64_t batch_seq) {
     }
     const char* sql =
         "UPDATE batches SET acked=1 WHERE run_id=? AND batch_seq=?";
-    sqlite3_stmt* stmt = prep_checked(db_, sql, "ack_batch");
+    sqlite3_stmt* stmt = cached_prepare(sql, "ack_batch");
     if (!stmt) return;
-    if (!bind_text_checked(stmt, 1, run_id, "ack_batch")) { sqlite3_finalize(stmt); return; }
+    sqlite3_reset(stmt);
+    sqlite3_clear_bindings(stmt);
+    if (!bind_text_checked(stmt, 1, run_id, "ack_batch")) return;
     sqlite3_bind_int64(stmt, 2, batch_seq);
     (void)step_done_checked(db_, stmt, "ack_batch");
-    sqlite3_finalize(stmt);
     result_bytes_cached_ = (result_bytes_cached_ > size) ? result_bytes_cached_ - size : 0;
 }
 
 std::vector<BatchRow> Spool::fetch_unacked(size_t limit) const {
     std::lock_guard<std::mutex> lk(mtx_);
+    // CLI-080: order by the monotonic insertion sequence.
     const char* sql =
-        "SELECT run_id, batch_seq, created_at, payload FROM batches "
-        "WHERE acked=0 ORDER BY created_at ASC LIMIT ?";
-    sqlite3_stmt* stmt = prep_checked(db_, sql, "fetch_unacked");
+        "SELECT run_id, batch_seq, created_at, ins_seq, payload FROM batches "
+        "WHERE acked=0 ORDER BY ins_seq ASC LIMIT ?";
+    sqlite3_stmt* stmt = cached_prepare(sql, "fetch_unacked");
     if (!stmt) return {};
+    sqlite3_reset(stmt);
+    sqlite3_clear_bindings(stmt);
     sqlite3_bind_int64(stmt, 1, static_cast<int64_t>(limit));
     std::vector<BatchRow> rows;
     while (sqlite3_step(stmt) == SQLITE_ROW)
@@ -371,23 +395,21 @@ std::vector<BatchRow> Spool::fetch_unacked(size_t limit) const {
     return rows;
 }
 
-std::vector<BatchRow> Spool::fetch_unacked_after(int64_t after_created_at,
-                                                   int64_t after_seq,
+std::vector<BatchRow> Spool::fetch_unacked_after(int64_t after_ins_seq,
                                                    size_t limit) const {
     std::lock_guard<std::mutex> lk(mtx_);
-    // Cursor-based: resume strictly after (created_at, batch_seq). This avoids
-    // restarting from the oldest row on every replay pass (task 77), so a large
-    // backlog is drained incrementally without starvation or duplication.
+    // CLI-080: cursor over the monotonic insertion sequence — NTP/RTC jumps
+    // cannot reorder or skip rows.
     const char* sql =
-        "SELECT run_id, batch_seq, created_at, payload FROM batches "
-        "WHERE acked=0 AND (created_at > ? OR (created_at = ? AND batch_seq > ?)) "
-        "ORDER BY created_at ASC, batch_seq ASC LIMIT ?";
-    sqlite3_stmt* stmt = prep_checked(db_, sql, "fetch_unacked_after");
+        "SELECT run_id, batch_seq, created_at, ins_seq, payload FROM batches "
+        "WHERE acked=0 AND ins_seq > ? "
+        "ORDER BY ins_seq ASC LIMIT ?";
+    sqlite3_stmt* stmt = cached_prepare(sql, "fetch_unacked_after");
     if (!stmt) return {};
-    sqlite3_bind_int64(stmt, 1, after_created_at);
-    sqlite3_bind_int64(stmt, 2, after_created_at);
-    sqlite3_bind_int64(stmt, 3, after_seq);
-    sqlite3_bind_int64(stmt, 4, static_cast<int64_t>(limit));
+    sqlite3_reset(stmt);
+    sqlite3_clear_bindings(stmt);
+    sqlite3_bind_int64(stmt, 1, after_ins_seq);
+    sqlite3_bind_int64(stmt, 2, static_cast<int64_t>(limit));
     std::vector<BatchRow> rows;
     while (sqlite3_step(stmt) == SQLITE_ROW)
         rows.push_back(decode_batch_row(stmt));
@@ -485,11 +507,27 @@ void Spool::quarantine_corrupt(const std::string& path) {
 bool Spool::migrate(int from_version) {
     if (from_version >= kCurrentSchemaVersion) return true;
     spdlog::info("spool: migrating schema {} -> {}", from_version, kCurrentSchemaVersion);
-    // v1 → v2: nothing structural changes (the version bump reserved space for
-    // the byte-counter and terminal-purge features which are query-compatible).
+    // v2 → v3: add the monotonic insertion sequence, backfilling from rowid
+    // (rowids are monotonic for a table with a composite PK, so existing rows
+    // keep their relative order).
+    if (from_version < 3) {
+        exec_nothrow("ALTER TABLE batches ADD COLUMN ins_seq INTEGER NOT NULL DEFAULT 0");
+        exec_nothrow("UPDATE batches SET ins_seq = rowid WHERE ins_seq = 0");
+        exec_nothrow("CREATE INDEX IF NOT EXISTS idx_unacked_seq ON batches(acked, ins_seq)");
+    }
     // Future migrations chain here:
-    //   if (from_version < 3) { ... ALTER ...; }
+    //   if (from_version < 4) { ... }
     return true;
+}
+
+// CLI-078: prepared-statement cache — every hot statement is compiled once.
+// All callers hold mtx_, so concurrent reuse is not possible.
+sqlite3_stmt* Spool::cached_prepare(const char* sql, const char* what) const {
+    auto it = stmt_cache_.find(sql);
+    if (it != stmt_cache_.end()) return it->second;
+    sqlite3_stmt* stmt = prep_checked(db_, sql, what);
+    if (stmt) stmt_cache_[sql] = stmt;
+    return stmt;
 }
 
 // CLI-062: maintain running byte counters instead of a full SUM(LENGTH)
