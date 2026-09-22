@@ -27,6 +27,22 @@ Result<std::string> generate_uuid() {
 } // namespace
 
 Result<std::string> load_or_create_client_id(const std::string& path) {
+    // X-003: ONE device identity. When running under Acadia-OS, the OS's
+    // device-identity service has provisioned /var/lib/acadia/device-id
+    // ("acadia-<serial>") — that is the canonical, factory-provisioned
+    // identity and takes precedence over this daemon's random UUID, so the
+    // Client's stream board_id matches the OS device id and HQ pairing.
+    {
+        std::ifstream os_identity("/var/lib/acadia/device-id");
+        if (os_identity) {
+            std::string id;
+            if (std::getline(os_identity, id) && !id.empty()) {
+                spdlog::debug("using OS provisioned device-id from /var/lib/acadia/device-id");
+                return Result<std::string>::ok(id);
+            }
+        }
+    }
+
     // Try to read an existing id first
     {
         std::ifstream in(path);
