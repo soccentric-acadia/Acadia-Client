@@ -48,10 +48,11 @@ struct ClientConfig {
     // Path to modules.yaml (read-only reference to HAL registry)
     std::string modules_yaml_path{"/etc/acadia/modules.yaml"};
 
-    // TLS (empty = plaintext; used in a later step)
+    // TLS (empty = plaintext; CLI-029: plaintext requires insecure = true)
     std::string tls_ca;
     std::string tls_cert;
     std::string tls_key;
+    bool        insecure{false};
 
     // Parse /etc/acadia/client.conf (TOML).
     // Also loads or creates /var/lib/acadia/client_id.

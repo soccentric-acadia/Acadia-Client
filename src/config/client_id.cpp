@@ -1,7 +1,12 @@
 #include "config/client_id.h"
 
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
 #include <filesystem>
 #include <fstream>
+#include <vector>
 #include <spdlog/spdlog.h>
 
 namespace acadia::client::config {
@@ -43,14 +48,24 @@ Result<std::string> load_or_create_client_id(const std::string& path) {
         }
     }
 
-    // Try to read an existing id first
+    // CLI-051: validate the persisted id — a garbage file is replaced with a
+    // fresh identity (and a loud warning) instead of being trusted verbatim.
+    // Accepted forms: a UUID (v4-shaped), or the OS device-id form
+    // ("acadia-<serial>").
     {
         std::ifstream in(path);
         if (in) {
             std::string id;
             if (std::getline(in, id) && !id.empty()) {
-                spdlog::debug("loaded client_id from {}", path);
-                return Result<std::string>::ok(std::move(id));
+                while (!id.empty() && (id.back() == '\r' || id.back() == ' ')) id.pop_back();
+                bool uuid_like = (id.size() == 36 && id[8] == '-' && id[13] == '-' &&
+                                  id[14] == '4' && id[18] == '-' && id[23] == '-');
+                bool os_form = id.rfind("acadia-", 0) == 0 && id.size() > 7;
+                if (uuid_like || os_form) {
+                    spdlog::debug("loaded client_id from {}", path);
+                    return Result<std::string>::ok(std::move(id));
+                }
+                spdlog::warn("client_id file contains an invalid id — regenerating");
             }
         }
     }
@@ -70,18 +85,40 @@ Result<std::string> load_or_create_client_id(const std::string& path) {
             "cannot create directory " + p.parent_path().string() + ": " + ec.message());
     }
 
-    // Write atomically via a temp file then rename
-    std::string tmp_path = path + ".tmp";
-    {
-        std::ofstream out(tmp_path, std::ios::trunc);
-        if (!out) {
-            return Result<std::string>::err("cannot write to " + tmp_path);
-        }
-        out << *uuid << "\n";
+    // CLI-053/055: unique temp name (no concurrent-instance race) created with
+    // 0644 permissions.
+    std::string tmp_path = path + ".XXXXXX";
+    std::vector<char> tmp_buf(tmp_path.begin(), tmp_path.end());
+    tmp_buf.push_back('\0');
+    const int tmp_fd = ::mkstemp(tmp_buf.data());
+    if (tmp_fd < 0) {
+        return Result<std::string>::err(std::string("mkstemp failed: ") + std::strerror(errno));
     }
-    std::filesystem::rename(tmp_path, path, ec);
+    ::fchmod(tmp_fd, 0644);
+    {
+        std::string payload = *uuid + "\n";
+        ssize_t written = ::write(tmp_fd, payload.data(), payload.size());
+        // CLI-052: fsync the FILE before rename so the identity survives a
+        // power cut between rename and flush.
+        ::fsync(tmp_fd);
+        ::close(tmp_fd);
+        if (written < 0) {
+            ::unlink(tmp_buf.data());
+            return Result<std::string>::err("cannot write identity temp file");
+        }
+    }
+    // CLI-052: fsync the DIRECTORY too so the rename itself is durable.
+    {
+        const int dir_fd = ::open(p.parent_path().c_str(), O_RDONLY | O_DIRECTORY);
+        if (dir_fd >= 0) {
+            ::fsync(dir_fd);
+            ::close(dir_fd);
+        }
+    }
+    std::filesystem::rename(tmp_buf.data(), path, ec);
     if (ec) {
-        return Result<std::string>::err("cannot rename " + tmp_path + " -> " + path + ": " + ec.message());
+        return Result<std::string>::err(
+            std::string("cannot rename identity temp file -> ") + path + ": " + ec.message());
     }
 
     spdlog::info("generated new client_id={}", *uuid);
