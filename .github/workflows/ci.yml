@@ -11,11 +11,24 @@ jobs:
     runs-on: ubuntu-22.04
     container:
       image: ubuntu:22.04@sha256:4f838adc7181d9039ac795a7d0aba05a9bd9ecd480d294483169c5def983b64d
+    # CLI-184: the repo is checked out INTO a subdirectory so that the CMake
+    # sibling reference `${CMAKE_SOURCE_DIR}/../Acadia-HAL` resolves INSIDE
+    # the workspace (actions/checkout refuses paths outside it).
+    defaults:
+      run:
+        working-directory: workspace/acadia-client
 
     steps:
       - uses: actions/checkout@v4
         with:
-          submodules: recursive
+          path: workspace/acadia-client
+
+      # Second checkout into the SIBLING position inside the workspace.
+      - uses: actions/checkout@v4
+        with:
+          repository: soccentric-acadia/Acadia-HAL
+          path: workspace/Acadia-HAL
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install dependencies
         run: |
@@ -24,18 +37,13 @@ jobs:
             build-essential cmake ninja-build git pkg-config \
             protobuf-compiler libprotobuf-dev libprotoc-dev \
             libgrpc++-dev libgrpc-dev libssl-dev \
-            libspdlog-dev libgtest-dev libyaml-cpp-dev
-          # yaml-cpp 0.8.0
+            libspdlog-dev libgtest-dev libyaml-cpp-dev \
+            libsqlite3-dev libboost-system-dev libboost-date-time-dev
+          # CLI-183: the configure step's FetchContent needs toml++'s runtime
+          # deps; sqlite/boost cover the spool/toml deps for a clean configure.
           git clone --depth=1 --branch 0.8.0 https://github.com/jbeder/yaml-cpp.git /tmp/yaml-cpp
           cmake -S /tmp/yaml-cpp -B /tmp/yaml-cpp/build -DCMAKE_INSTALL_PREFIX=/usr -DYAML_CPP_BUILD_TESTS=OFF -GNinja
           ninja -C /tmp/yaml-cpp/build install
-
-      - name: Checkout Acadia-HAL (for protos)
-        uses: actions/checkout@v4
-        with:
-          repository: soccentric-acadia/Acadia-HAL
-          path: ../Acadia-HAL
-          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Proto hygiene gate (X1-001)
         run: |
@@ -76,16 +84,22 @@ jobs:
   quality-gate:
     name: Warnings-as-errors + static analysis (task 81)
     runs-on: ubuntu-22.04
+    defaults:
+      run:
+        working-directory: workspace/acadia-client
     steps:
       - uses: actions/checkout@v4
+        with:
+          path: workspace/acadia-client
       - uses: actions/checkout@v4
         with:
           repository: soccentric-acadia/Acadia-HAL
-          path: ../Acadia-HAL
+          path: workspace/Acadia-HAL
           token: ${{ secrets.GITHUB_TOKEN }}
       - name: Configure with warnings-as-errors
         run: |
-          apt-get update -qq && apt-get install -y --no-install-recommends \
+          # CLI-185: on a hosted (non-container) runner apt needs sudo.
+          sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends \
             build-essential cmake ninja-build git pkg-config protobuf-compiler \
             libprotobuf-dev libprotoc-dev libgrpc++-dev libgrpc-dev libssl-dev \
             libspdlog-dev libgtest-dev libyaml-cpp-dev clang-tidy clang-format
