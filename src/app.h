@@ -17,6 +17,8 @@
 
 namespace acadia::client {
 
+namespace hal_service { class HalServiceImpl; }
+
 // Top-level application object. Owns all subsystems.
 // Constructed in main, never copied.
 class App {
@@ -56,6 +58,11 @@ private:
     // HalService gRPC server — always-on inbound endpoint for PySDK.
     // Runs in hal_service_thread_; no DB writes on this path.
     std::unique_ptr<::grpc::Server> hal_service_server_;
+    // CLI-009: RegisterService does NOT take ownership — the service must
+    // outlive the server, so it is held here explicitly.
+    std::unique_ptr<hal_service::HalServiceImpl> hal_service_;
+    // CLI-008: credentials for the inbound HalService (TLS/mTLS or plaintext).
+    std::shared_ptr<::grpc::ServerCredentials> hal_service_credentials_;
     std::thread                     hal_service_thread_;
 };
 

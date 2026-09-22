@@ -236,12 +236,32 @@ bool App::init() {
         const std::string listen_addr =
             cfg_.hal_service_bind + ":" + std::to_string(cfg_.hal_service_port);
 
-        auto hal_svc_impl = std::make_unique<hal_service::HalServiceImpl>(
+        hal_service_ = std::make_unique<hal_service::HalServiceImpl>(
             shared_registry, *registry_, cfg_.hal_service_auth_token);
 
         ::grpc::ServerBuilder builder;
-        builder.AddListeningPort(listen_addr, ::grpc::InsecureServerCredentials());
-        builder.RegisterService(hal_svc_impl.release());  // gRPC takes ownership
+        // CLI-008: honour the TLS keys from the config (tls_ca/tls_cert/tls_key)
+        // — when set, the inbound HalService listener speaks TLS (mTLS when a
+        // client CA is configured) instead of plaintext.
+        if (!cfg_.tls_cert.empty() && !cfg_.tls_key.empty()) {
+            ::grpc::SslServerCredentialsOptions ssl;
+            ssl.pem_key_cert_pairs.push_back({cfg_.tls_key, cfg_.tls_cert});
+            if (!cfg_.tls_ca.empty()) {
+                ::grpc::SslServerCredentialsOptions::PemKeyCertPair ca;
+                ssl.client_certificate_request =
+                    GRPC_SSL_REQUEST_AND_REQUIRE_CLIENT_CERTIFICATE_AND_VERIFY;
+                ssl.pem_root_certs = cfg_.tls_ca;
+                (void)ssl;
+            }
+            hal_service_credentials_ =
+                ::grpc::SslServerCredentials(ssl);
+        } else {
+            hal_service_credentials_ = ::grpc::InsecureServerCredentials();
+        }
+        builder.AddListeningPort(listen_addr, hal_service_credentials_);
+        // CLI-009: RegisterService does NOT take ownership; hold the service
+        // in a member so it outlives the server.
+        builder.RegisterService(hal_service_.get());
         hal_service_server_ = builder.BuildAndStart();
         if (!hal_service_server_) {
             spdlog::critical("app: failed to start HalService on {}", listen_addr);
@@ -262,7 +282,7 @@ bool App::init() {
 
     // 7. Diagnostic socket (T045)
     diag_socket_ = std::make_unique<DiagSocket>(
-        "/run/acadia/client.sock",
+        cfg_.diag_socket_path,  // CLI-010: configurable, no longer hard-coded
         [this](const std::string& /*query*/) -> std::string {
             auto states = spool_->all_run_states();
             std::string r = R"({"connected":)";

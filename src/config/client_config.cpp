@@ -59,6 +59,9 @@ Result<ClientConfig> ClientConfig::load(const std::string& path) {
     if (auto v = tbl["tls_cert"].value<std::string>())           { cfg.tls_cert        = *v; }
     if (auto v = tbl["tls_key"].value<std::string>())            { cfg.tls_key         = *v; }
 
+    if (auto v = tbl["log_level"].value<std::string>())        { cfg.log_level = *v; }
+    if (auto v = tbl["diag_socket_path"].value<std::string>()) { cfg.diag_socket_path = *v; }
+
     if (auto v = tbl["result_spool_cap_bytes"].value<int64_t>()) {
         cfg.result_spool_cap_bytes = static_cast<uint64_t>(*v);
     }

@@ -39,6 +39,12 @@ struct ClientConfig {
     // Extra log paths to tail
     std::vector<std::string> log_paths;
 
+    // CLI-004: log level ("debug" | "info" | "warn" | "error"); empty = info.
+    std::string log_level;
+
+    // CLI-010: diagnostic unix-socket path.
+    std::string diag_socket_path{"/run/acadia/client.sock"};
+
     // Path to modules.yaml (read-only reference to HAL registry)
     std::string modules_yaml_path{"/etc/acadia/modules.yaml"};
 
