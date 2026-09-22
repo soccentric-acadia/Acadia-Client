@@ -137,6 +137,19 @@ private:
     uint64_t         result_cap_;
     uint64_t         log_cap_;
 
+    // CLI-062: running byte counters (resynced lazily via *_dirty_).
+    mutable uint64_t result_bytes_cached_ = 0;
+    mutable uint64_t log_bytes_cached_    = 0;
+    mutable bool     result_bytes_dirty_  = true;
+    mutable bool     log_bytes_dirty_     = true;
+    uint64_t         log_evicted_newest_  = 0;
+
+    // CLI-061/073/081 helpers.
+    std::string quick_check() const;
+    static void quarantine_corrupt(const std::string& path);
+    bool        migrate(int from_version);
+    bool        exec_nothrow(const char* sql);
+
 public:
     // Task 76: expose the CONFIGURED capacity (not a derived value) so the
     // heartbeat can report capacity, current usage, and pressure separately.
