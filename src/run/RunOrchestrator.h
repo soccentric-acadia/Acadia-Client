@@ -52,14 +52,19 @@ struct RunContext {
     std::vector<uint8_t>     config_blob;      // serialised Any
     std::atomic<bool>        paused{false};
     std::atomic<bool>        stop{false};
+    std::atomic<bool>        failed{false};    // CLI-083: terminal FAILED set
+    std::atomic<bool>        aborted{false};   // CLI-084: terminal ABORTED set
+    std::atomic<bool>        finished{false};  // CLI-085: driver done (reapable)
     int64_t                  batch_seq   = 0;
-    std::string              type_url;         // result type URL
+    int                      interval_ms = 1000; // CLI-092: from ConfigureRun
+    int                      poll_ms     = 200;  // CLI-093: EVENT_BASED period
     uint64_t                 next_sequence = 0; // monotonic per-run counter (stamped by runner)
 };
 
 class RunOrchestrator {
 public:
-    RunOrchestrator(Spool& spool, StreamClient& stream, HalInvokeFn hal_fn);
+    RunOrchestrator(Spool& spool, StreamClient& stream, HalInvokeFn hal_fn,
+                    std::function<bool(const std::string&)> has_module = nullptr);
     ~RunOrchestrator();
 
     RunOrchestrator(const RunOrchestrator&)            = delete;
@@ -90,6 +95,10 @@ private:
     void run_monitoring(RunContext& ctx);
     void run_event_based(RunContext& ctx);
 
+    // CLI-094: HAL invocation with a watchdog (TIMEOUT on hang).
+    std::vector<hal::TestResult> hal_call_watchdog(RunContext& ctx,
+                                                    std::chrono::milliseconds timeout_ms);
+
     // Stamp sequence and timestamp on each result, then flush to spool/stream.
     void flush_results(RunContext& ctx,
                        std::vector<hal::TestResult> results,
@@ -104,10 +113,21 @@ private:
     Spool&          spool_;
     StreamClient&   stream_;
     HalInvokeFn     hal_fn_;
+    std::function<bool(const std::string&)> has_module_;  // CLI-088
+
+    // CLI-086: concurrent-run cap (reject beyond this with an error ack).
+    static constexpr size_t kMaxConcurrentRuns = 16;
+    // CLI-087: pending Configure TTL (StartRun must arrive within this window).
+    static constexpr std::chrono::seconds kPendingTtl{60};
 
     mutable std::mutex mtx_;
     std::unordered_map<std::string, RunEntry> runs_;
-    std::unordered_map<std::string, acadia::stream::ConfigureRun> pending_configs_;
+    std::unordered_map<std::string,
+        std::pair<acadia::stream::ConfigureRun, std::chrono::steady_clock::time_point>>
+        pending_configs_;
+
+    // CLI-085: reap finished workers (join + erase).
+    void reap_finished_locked();
 };
 
 } // namespace acadia::client
