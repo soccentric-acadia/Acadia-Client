@@ -391,7 +391,7 @@ std::vector<BatchRow> Spool::fetch_unacked(size_t limit) const {
     std::vector<BatchRow> rows;
     while (sqlite3_step(stmt) == SQLITE_ROW)
         rows.push_back(decode_batch_row(stmt));
-    sqlite3_finalize(stmt);
+    // NOTE: stmt is CACHED (CLI-078) — never finalize per use.
     return rows;
 }
 
@@ -413,7 +413,7 @@ std::vector<BatchRow> Spool::fetch_unacked_after(int64_t after_ins_seq,
     std::vector<BatchRow> rows;
     while (sqlite3_step(stmt) == SQLITE_ROW)
         rows.push_back(decode_batch_row(stmt));
-    sqlite3_finalize(stmt);
+    // NOTE: stmt is CACHED (CLI-078) — never finalize per use.
     return rows;
 }
 
@@ -510,7 +510,7 @@ bool Spool::migrate(int from_version) {
     // v2 → v3: add the monotonic insertion sequence, backfilling from rowid
     // (rowids are monotonic for a table with a composite PK, so existing rows
     // keep their relative order).
-    if (from_version < 3) {
+    if (from_version < 3 && from_version >= 1) {  // v1/v2 created the table WITHOUT ins_seq
         exec_nothrow("ALTER TABLE batches ADD COLUMN ins_seq INTEGER NOT NULL DEFAULT 0");
         exec_nothrow("UPDATE batches SET ins_seq = rowid WHERE ins_seq = 0");
         exec_nothrow("CREATE INDEX IF NOT EXISTS idx_unacked_seq ON batches(acked, ins_seq)");

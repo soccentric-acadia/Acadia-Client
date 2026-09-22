@@ -1,5 +1,25 @@
 # Changelog
 
+## 2026-09-22 — HalService mode validation and regression fixes (CLI-117/118)
+
+- HalService rejects requested execution modes not declared in the module's
+  `modes` list (modules.yaml) with INVALID_ARGUMENT; modes are matched
+  case-insensitively including the legacy aliases ONE_SHOT/EVENT; an empty or
+  missing list is not a restriction (CLI-118, `registry/ModePolicy.h`).
+- `ListModules` reports non-numeric module versions as 0 with a warning
+  instead of swallowing `std::stoi` exceptions (CLI-117).
+- Fixed use-after-free: cached prepared statements (CLI-078) were finalized by
+  their callers, leaving dangling pointers in the cache (~Spool double-free
+  segfault); cached statements are now finalizer-owned by the destructor only.
+- Fixed `hal_call_watchdog` returning while the HAL worker thread was still
+  joinable — `std::thread`'s destructor called `std::terminate` and aborted
+  the process on every completed HAL call; the worker is now joined (success)
+  or detached (exception) before return.
+- Test hygiene: spool fixtures use per-process unique temp DB paths and remove
+  pre-existing files, so stale databases from crashed runs can no longer
+  collide; cursor-based replay tests updated to the CLI-080 `ins_seq` cursor
+  API.
+
 ## 2026-09-21 — Root-agent feature workflow guard (task 006)
 
 - Added a canonical instruction requiring leaf-started agents to refuse feature

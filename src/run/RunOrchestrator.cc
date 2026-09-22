@@ -543,8 +543,18 @@ std::vector<hal::TestResult> RunOrchestrator::hal_call_watchdog(
     auto fut = task.get_future();
     std::thread worker(std::move(task));
     if (fut.wait_for(timeout_ms) == std::future_status::ready) {
-        auto result = fut.get();
-        return result;
+        try {
+            auto result = fut.get();
+            // The callable completed; join before return so ~thread cannot
+            // terminate on a joinable thread.
+            worker.join();
+            return result;
+        } catch (...) {
+            // The callable stored an exception in the future and rethrew it;
+            // detach so ~thread on the unwinding path does not std::terminate.
+            worker.detach();
+            throw;
+        }
     }
     // Timeout: detach the worker (the HAL call may still be blocked inside a
     // driver; it will finish or fail on its own) and report TIMEOUT so the

@@ -13,6 +13,8 @@
 #include <fstream>
 #include <cstdlib>
 #include <string>
+#include <unistd.h>
+#include <atomic>
 #include <vector>
 
 using namespace acadia::client;
@@ -50,8 +52,12 @@ std::string make_modules_yaml() {
 }
 
 std::unique_ptr<Spool> make_mem_spool() {
+    // Per-process unique directory so stale DBs from earlier runs (crashed or
+    // not) can never collide with fresh test data.
+    static std::atomic<int> counter{0};
     auto dir = std::filesystem::temp_directory_path() /
-               ("acadia_spool_test_" + std::to_string(std::rand()));
+               ("acadia_spool_test_" + std::to_string(::getpid()) + "_" +
+                std::to_string(counter++));
     std::filesystem::create_directories(dir);
     auto p = dir / "spool.db";
     return std::make_unique<Spool>(p.string(), 64 * 1024 * 1024, 16 * 1024 * 1024);

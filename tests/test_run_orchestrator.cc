@@ -18,6 +18,7 @@
 #include <filesystem>
 #include <stdexcept>
 #include <thread>
+#include <unistd.h>
 #include <vector>
 #include <atomic>
 
@@ -30,9 +31,14 @@ using namespace acadia::stream;
 
 std::unique_ptr<Spool> make_mem_spool() {
     static std::atomic<int> counter{0};
-    // Use a unique temp path for each test.
+    // Unique per process+counter so stale DBs from earlier runs can never
+    // collide (the tests assume a fresh spool).
     auto path = std::filesystem::temp_directory_path() /
-                ("test_spool_" + std::to_string(counter++) + ".db");
+                ("test_spool_" + std::to_string(::getpid()) + "_" +
+                 std::to_string(counter++) + ".db");
+    std::filesystem::remove(path);
+    std::filesystem::remove(path.generic_string().append("-wal"));
+    std::filesystem::remove(path.generic_string().append("-shm"));
     return std::make_unique<Spool>(path.string(), 64 * 1024 * 1024, 16 * 1024 * 1024);
 }
 
