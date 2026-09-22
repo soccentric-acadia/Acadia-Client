@@ -11,6 +11,7 @@
 #include "registry/AdapterBase.h"
 
 #include <memory>
+#include <mutex>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -40,8 +41,16 @@ public:
     // List all registered module IDs (sorted).
     std::vector<std::string> registered_ids() const;
 
+    // CLI-104/116: true when the module is backed by the honest stub
+    // (no real HAL implementation behind it).
+    bool is_stub_adapter(const std::string& module_id) const;
+
 private:
     std::unordered_map<std::string, std::unique_ptr<AdapterBase>> adapters_;
+    // CLI-112: adapters/HAL classes are not thread-safe; every invoke is
+    // serialized so the HalService and the RunOrchestrator cannot drive the
+    // same adapter concurrently.
+    mutable std::mutex invoke_mtx_;
 };
 
 } // namespace acadia::client

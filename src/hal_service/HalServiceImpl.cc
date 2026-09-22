@@ -30,12 +30,44 @@ HalServiceImpl::HalServiceImpl(std::shared_ptr<AdapterRegistry> adapter_reg,
                                 const std::string&                auth_token)
     : adapter_reg_(std::move(adapter_reg)), module_reg_(module_reg), auth_token_(auth_token) {}
 
-// Task 70: authenticate inbound HalService calls when a token is configured.
-// The client must present `authorization: Bearer <token>` in request metadata;
-// otherwise the call is rejected with UNAUTHENTICATED (fail closed).
+// Task 70 + CLI-102/103: authentication is REQUIRED. An empty configured token
+// only permits loopback peers (fail closed for any network peer); the token
+// itself is compared in constant time to avoid a timing side channel.
+namespace {
+bool is_loopback_peer(const std::string& peer) {
+    // Peer strings look like "ipv6:[::1]:50052" / "ipv4:127.0.0.1:50052".
+    return peer.find("127.0.0.1") != std::string::npos ||
+           peer.find("[::1]") != std::string::npos ||
+           peer.find("localhost") != std::string::npos ||
+           peer.find("unix:") == 0;
+}
+bool constant_time_equal(const std::string& a, const std::string& b) {
+    if (a.size() != b.size()) return false;
+    volatile unsigned char diff = 0;
+    for (size_t i = 0; i < a.size(); ++i)
+        diff |= static_cast<unsigned char>(a[i]) ^ static_cast<unsigned char>(b[i]);
+    return diff == 0;
+}
+} // namespace
+
 ::grpc::Status HalServiceImpl::require_auth(::grpc::ServerContext* ctx,
                                              const std::string&     expected_token) {
-    if (expected_token.empty()) return ::grpc::Status::OK;  // no auth configured
+    if (expected_token.empty()) {
+        // CLI-102: the shipped default is an empty token — any NON-loopback
+        // peer must be rejected (fail closed); loopback stays open so the
+        // local SDK keeps working on a bench device.
+        if (ctx != nullptr) {
+            const std::string peer = ctx->peer();
+            if (!is_loopback_peer(peer)) {
+                spdlog::warn("hal_service: unauthenticated non-loopback peer '{}' rejected "
+                             "(hal_service_auth_token not configured)", peer);
+                return ::grpc::Status(::grpc::StatusCode::UNAUTHENTICATED,
+                                      "hal_service_auth_token must be configured for network access");
+            }
+            return ::grpc::Status::OK;
+        }
+        return ::grpc::Status::OK;
+    }
     if (ctx == nullptr) return ::grpc::Status(::grpc::StatusCode::UNAUTHENTICATED,
                                               "authentication required");
     auto it = ctx->client_metadata().find("authorization");
@@ -44,9 +76,12 @@ HalServiceImpl::HalServiceImpl(std::shared_ptr<AdapterRegistry> adapter_reg,
                               "missing authorization header");
     const std::string header(it->second.data(), it->second.size());
     const std::string expected = "Bearer " + expected_token;
-    if (header != expected)
+    // CLI-103: constant-time comparison.
+    if (!constant_time_equal(header, expected))
         return ::grpc::Status(::grpc::StatusCode::UNAUTHENTICATED,
                               "invalid authorization token");
+    // CLI-120: audit trail of which peer ran what.
+    spdlog::info("hal_service: authorized peer={} ", ctx->peer());
     return ::grpc::Status::OK;
 }
 
@@ -72,6 +107,12 @@ static std::vector<uint8_t> module_config_bytes(const google::protobuf::Any& any
     if (!adapter_reg_->has_adapter(module_id))
         return {::grpc::StatusCode::INVALID_ARGUMENT,
                 "unknown module_id: " + module_id};
+    // CLI-104: stub-backed modules are honestly UNIMPLEMENTED (they used to
+    // run the stub adapter and report a SKIPPED verdict as if it were real).
+    if (adapter_reg_->is_stub_adapter(module_id))
+        return ::grpc::Status(
+            ::grpc::StatusCode::UNIMPLEMENTED,
+            "module '" + module_id + "' has no HAL implementation (stub only)");
     return ::grpc::Status::OK;
 }
 
@@ -114,19 +155,23 @@ void HalServiceImpl::release_session(const std::string& session_id) {
     sessions_.erase(session_id);
 }
 
-std::shared_ptr<HalServiceImpl::Session>
-HalServiceImpl::find_session(const std::string& module_id,
-                              const std::string& session_id) {
+// CLI-110: Stop/Pause/Resume with an EMPTY session_id acts on ALL sessions of
+// the module (previously an arbitrary one, chosen by hash order).
+std::vector<std::shared_ptr<HalServiceImpl::Session>>
+HalServiceImpl::find_sessions(const std::string& module_id,
+                               const std::string& session_id) {
     std::lock_guard<std::mutex> lk(sessions_mu_);
+    std::vector<std::shared_ptr<Session>> out;
     if (!session_id.empty()) {
         auto it = sessions_.find(session_id);
-        return it == sessions_.end() ? nullptr : it->second;
+        if (it != sessions_.end() && it->second->module_id == module_id)
+            out.push_back(it->second);
+        return out;
     }
-    // Empty session_id -> any session for the module (all-of-module semantics).
     for (const auto& kv : sessions_) {
-        if (kv.second->module_id == module_id) return kv.second;
+        if (kv.second->module_id == module_id) out.push_back(kv.second);
     }
-    return nullptr;
+    return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -145,7 +190,7 @@ HalServiceImpl::find_session(const std::string& module_id,
     spdlog::info("hal_service: RunSingleShot module_id={}", req->module_id());
 
     auto results = adapter_reg_->invoke(req->module_id(),
-                                         1 /*SINGLE_SHOT*/,
+                                         hal::common::SINGLE_SHOT,
                                          module_config_bytes(req->module_config()));
     if (results.empty()) {
         resp->set_module_id(req->module_id());
@@ -155,7 +200,23 @@ HalServiceImpl::find_session(const std::string& module_id,
         return ::grpc::Status::OK;
     }
 
-    *resp = make_envelope(req->module_id(), hal::common::SINGLE_SHOT, results[0]);
+    // CLI-105: no longer silently discards results beyond the first — the
+    // envelope carries the AGGREGATE verdict (worst status) and the first
+    // detailed payload; multi-test results remain individually visible in the
+    // batch/stream path.
+    int worst = static_cast<int>(hal::common::TEST_STATUS_PASS);
+    const hal::TestResult* worst_r = &results[0];
+    std::string first_error;
+    for (const auto& r : results) {
+        const int s = static_cast<int>(hal_bridge::to_proto(r.output.status));
+        if (s > worst) { worst = s; worst_r = &r; }
+        if (!r.output.error_message.empty() && first_error.empty())
+            first_error = r.output.error_message;
+    }
+    *resp = make_envelope(req->module_id(), hal::common::SINGLE_SHOT, *worst_r);
+    resp->set_status(static_cast<hal::common::TestStatus>(worst));
+    if (!first_error.empty())
+        resp->set_error_message(first_error);
     return ::grpc::Status::OK;
 }
 
@@ -172,44 +233,22 @@ HalServiceImpl::find_session(const std::string& module_id,
     auto st = validate_module(req->module_id());
     if (!st.ok()) return st;
 
-    const int     interval_ms  = req->common().interval_ms() > 0
-                                    ? req->common().interval_ms()
-                                    : kDefaultIntervalMs;
+    // CLI-106: enforce a floor — the HAL must never be hammered at 1 kHz.
+    int interval_ms = req->common().interval_ms() > 0
+                          ? req->common().interval_ms()
+                          : kDefaultIntervalMs;
+    if (interval_ms < 100) {
+        interval_ms = 100;
+        spdlog::warn("hal_service: interval_ms floored to 100 (was {})",
+                     req->common().interval_ms());
+    }
     const int64_t duration_ms  = req->common().duration_ms();
     const bool    run_forever  = req->common().run_forever() || duration_ms <= 0;
 
-    spdlog::info("hal_service: StartLongTerm module_id={} interval={}ms forever={}",
-                 req->module_id(), interval_ms, run_forever);
-
-    auto [session_id, session] = acquire_session(req->module_id());
-    auto t_start   = std::chrono::steady_clock::now();
-
-    while (!ctx->IsCancelled() && !session->stop_requested.load()) {
-        // Duration check
-        if (!run_forever) {
-            auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-                std::chrono::steady_clock::now() - t_start).count();
-            if (elapsed >= duration_ms) break;
-        }
-        // Pause
-        if (session->paused.load()) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(kPauseCheckMs));
-            continue;
-        }
-
-        auto results = adapter_reg_->invoke(req->module_id(), 2 /*LONG_TERM*/,
-                                             module_config_bytes(req->module_config()));
-        for (const auto& r : results) {
-            if (!writer->Write(make_envelope(req->module_id(), hal::common::LONG_TERM, r))) {
-                release_session(session_id);
-                return ::grpc::Status::OK;
-            }
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds(interval_ms));
-    }
-
-    release_session(session_id);
-    return ::grpc::Status::OK;
+    // CLI-114/115: one shared streaming helper drives all three modes.
+    return stream_loop(ctx, req->module_id(), req->module_config(),
+                       hal::common::LONG_TERM, interval_ms, duration_ms, run_forever,
+                       writer);
 }
 
 // ---------------------------------------------------------------------------
@@ -225,42 +264,21 @@ HalServiceImpl::find_session(const std::string& module_id,
     auto st = validate_module(req->module_id());
     if (!st.ok()) return st;
 
-    const int     interval_ms  = req->common().interval_ms() > 0
-                                    ? req->common().interval_ms()
-                                    : kDefaultIntervalMs;
+    int interval_ms = req->common().interval_ms() > 0
+                          ? req->common().interval_ms()
+                          : kDefaultIntervalMs;
+    if (interval_ms < 100) {  // CLI-106
+        interval_ms = 100;
+        spdlog::warn("hal_service: interval_ms floored to 100 (was {})",
+                     req->common().interval_ms());
+    }
     const int64_t duration_ms  = req->common().duration_ms();
     const bool    run_forever  = req->common().run_forever() || duration_ms <= 0;
 
-    spdlog::info("hal_service: StartMonitoring module_id={} interval={}ms forever={}",
-                 req->module_id(), interval_ms, run_forever);
-
-    auto [session_id, session] = acquire_session(req->module_id());
-    auto t_start   = std::chrono::steady_clock::now();
-
-    while (!ctx->IsCancelled() && !session->stop_requested.load()) {
-        if (!run_forever) {
-            auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-                std::chrono::steady_clock::now() - t_start).count();
-            if (elapsed >= duration_ms) break;
-        }
-        if (session->paused.load()) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(kPauseCheckMs));
-            continue;
-        }
-
-        auto results = adapter_reg_->invoke(req->module_id(), 3 /*MONITORING*/,
-                                             module_config_bytes(req->module_config()));
-        for (const auto& r : results) {
-            if (!writer->Write(make_envelope(req->module_id(), hal::common::MONITORING, r))) {
-                release_session(session_id);
-                return ::grpc::Status::OK;
-            }
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds(interval_ms));
-    }
-
-    release_session(session_id);
-    return ::grpc::Status::OK;
+    // CLI-114/115: shared helper.
+    return stream_loop(ctx, req->module_id(), req->module_config(),
+                       hal::common::MONITORING, interval_ms, duration_ms, run_forever,
+                       writer);
 }
 
 // ---------------------------------------------------------------------------
@@ -276,31 +294,89 @@ HalServiceImpl::find_session(const std::string& module_id,
     auto st = validate_module(req->module_id());
     if (!st.ok()) return st;
 
-    const int poll_ms = req->common().poll_interval_ms() > 0
-                            ? req->common().poll_interval_ms()
-                            : kDefaultPollMs;
+    int poll_ms = req->common().poll_interval_ms() > 0
+                      ? req->common().poll_interval_ms()
+                      : kDefaultPollMs;
+    if (poll_ms < 100) {  // CLI-106: floor applies to the event poll too.
+        poll_ms = 100;
+        spdlog::warn("hal_service: poll_interval_ms floored to 100 (was {})",
+                     req->common().poll_interval_ms());
+    }
+    const int64_t duration_ms  = req->common().duration_ms();
+    const bool    run_forever  = req->common().run_forever() || duration_ms <= 0;
 
-    spdlog::info("hal_service: StartEventBased module_id={} poll={}ms",
-                 req->module_id(), poll_ms);
+    // CLI-114/115: shared helper.
+    return stream_loop(ctx, req->module_id(), req->module_config(),
+                       hal::common::EVENT_BASED, poll_ms, duration_ms, run_forever,
+                       writer);
+}
 
-    auto [session_id, session] = acquire_session(req->module_id());
+// ---------------------------------------------------------------------------
+// Shared streaming loop (CLI-114)
+// ---------------------------------------------------------------------------
+
+::grpc::Status HalServiceImpl::stream_loop(
+    ::grpc::ServerContext*                     ctx,
+    const std::string&                         module_id,
+    const google::protobuf::Any&               module_config,
+    hal::common::ExecutionMode                 mode,
+    int                                        interval_ms,
+    int64_t                                    duration_ms,
+    bool                                       run_forever,
+    ::grpc::ServerWriter<hal::common::ResultEnvelope>* writer)
+{
+    // CLI-113: serialize the config ONCE, not every tick.
+    const std::vector<uint8_t> cfg_bytes = module_config_bytes(module_config);
+
+    // CLI-111: bound concurrent streaming sessions.
+    {
+        std::lock_guard<std::mutex> lk(sessions_mu_);
+        if (sessions_.size() >= kMaxSessions) {
+            return ::grpc::Status(
+                ::grpc::StatusCode::RESOURCE_EXHAUSTED,
+                "too many concurrent streaming sessions (limit " +
+                    std::to_string(kMaxSessions) + ")");
+        }
+    }
+
+    auto [session_id, session] = acquire_session(module_id);
+    const auto t_start = std::chrono::steady_clock::now();
+
+    // CLI-109: the session_id is announced in initial metadata so the caller
+    // can address Stop/Pause/Resume at this specific session.
+    ctx->AddInitialMetadata("x-acadia-session-id", session_id);
+    spdlog::info("hal_service: stream module_id={} mode={} interval={}ms forever={} session={}",
+                 module_id, static_cast<int>(mode), interval_ms, run_forever, session_id);
+
+    // CLI-107: interval wait observes cancellation (condvar with timeout).
+    std::mutex wake_mu;
+    std::condition_variable wake_cv;
 
     while (!ctx->IsCancelled() && !session->stop_requested.load()) {
+        if (!run_forever) {
+            auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - t_start).count();
+            if (elapsed >= duration_ms) break;
+        }
         if (session->paused.load()) {
             std::this_thread::sleep_for(std::chrono::milliseconds(kPauseCheckMs));
             continue;
         }
 
-        // mode=4: adapter returns empty when the event condition is NOT met.
-        auto results = adapter_reg_->invoke(req->module_id(), 4 /*EVENT_BASED*/,
-                                             module_config_bytes(req->module_config()));
+        auto results = adapter_reg_->invoke(module_id, static_cast<int>(mode), cfg_bytes);
         for (const auto& r : results) {
-            if (!writer->Write(make_envelope(req->module_id(), hal::common::EVENT_BASED, r))) {
+            // CLI-108: a failed Write means the client is gone → CANCELLED.
+            if (!writer->Write(make_envelope(module_id, mode, r))) {
                 release_session(session_id);
-                return ::grpc::Status::OK;
+                return ::grpc::Status{::grpc::StatusCode::CANCELLED, "client disconnected"};
             }
         }
-        std::this_thread::sleep_for(std::chrono::milliseconds(poll_ms));
+
+        {
+            std::unique_lock<std::mutex> wk(wake_mu);
+            wake_cv.wait_for(wk, std::chrono::milliseconds(interval_ms),
+                             [&] { return ctx->IsCancelled() || session->stop_requested.load(); });
+        }
     }
 
     release_session(session_id);
@@ -319,9 +395,9 @@ HalServiceImpl::find_session(const std::string& module_id,
     if (auto st = require_auth(ctx, auth_token_); !st.ok()) return st;
     spdlog::info("hal_service: Stop module_id={} session_id={}",
                  req->module_id(), req->session_id());
-    auto s = find_session(req->module_id(), req->session_id());
-    if (s) {
-        s->stop_requested.store(true);
+    auto targets = find_sessions(req->module_id(), req->session_id());
+    if (!targets.empty()) {
+        for (auto& s : targets) s->stop_requested.store(true);
         resp->set_accepted(true);
     } else {
         resp->set_accepted(false);
@@ -337,9 +413,9 @@ HalServiceImpl::find_session(const std::string& module_id,
 {
     if (auto st = require_auth(ctx, auth_token_); !st.ok()) return st;
     spdlog::info("hal_service: Pause module_id={}", req->module_id());
-    auto s = find_session(req->module_id(), req->session_id());
-    if (s) {
-        s->paused.store(true);
+    auto targets = find_sessions(req->module_id(), req->session_id());
+    if (!targets.empty()) {
+        for (auto& s : targets) s->paused.store(true);
         resp->set_accepted(true);
     } else {
         resp->set_accepted(false);
@@ -355,9 +431,9 @@ HalServiceImpl::find_session(const std::string& module_id,
 {
     if (auto st = require_auth(ctx, auth_token_); !st.ok()) return st;
     spdlog::info("hal_service: Resume module_id={}", req->module_id());
-    auto s = find_session(req->module_id(), req->session_id());
-    if (s) {
-        s->paused.store(false);
+    auto targets = find_sessions(req->module_id(), req->session_id());
+    if (!targets.empty()) {
+        for (auto& s : targets) s->paused.store(false);
         resp->set_accepted(true);
     } else {
         resp->set_accepted(false);
@@ -383,10 +459,26 @@ HalServiceImpl::find_session(const std::string& module_id,
         entry->set_proto_package(m.proto_package);
         entry->set_config_type(m.config_type_url);
         entry->set_result_type(m.result_type_url);
-        // version is stored as string (from YAML); convert to int32 best-effort.
-        try { entry->set_version(std::stoi(m.version)); }
-        catch (...) { entry->set_version(0); }
-        entry->set_status(m.status.empty() ? "active" : m.status);
+        // CLI-117: no exception-swallowing — validate characters, parse with
+        // strtol, and surface non-numeric versions as 0 with a warning.
+        {
+            const std::string& v = m.version;
+            bool numeric = !v.empty() && v.find_first_not_of("0123456789") == std::string::npos;
+            if (numeric) {
+                errno = 0;
+                long parsed = std::strtol(v.c_str(), nullptr, 10);
+                entry->set_version(errno == 0 ? static_cast<int32_t>(parsed) : 0);
+            } else if (!v.empty()) {
+                spdlog::warn("hal_service: module '{}' has non-numeric version '{}' — reporting 0", m.id, v);
+                entry->set_version(0);
+            }
+        }
+        // CLI-116: a stub-backed module is reported as unimplemented — not
+        // active (it cannot execute real tests).
+        const bool stub = adapter_reg_->has_adapter(m.id) &&
+                          adapter_reg_->is_stub_adapter(m.id);
+        entry->set_status(stub ? std::string("unimplemented")
+                               : std::string(m.status.empty() ? "active" : m.status));
         entry->set_source_path(m.source_path);
     }
     return ::grpc::Status::OK;

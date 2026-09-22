@@ -11,6 +11,9 @@ namespace acadia::client {
 
 class StubAdapter final : public AdapterBase {
 public:
+    // CLI-104/116: stub-backed modules are reported honestly.
+    bool is_stub() const override { return true; }
+
     explicit StubAdapter(std::string module_id) : id_(std::move(module_id)) {}
     ~StubAdapter() override = default;
 

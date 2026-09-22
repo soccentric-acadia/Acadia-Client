@@ -20,6 +20,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <vector>
 #include <unordered_map>
 
 namespace acadia::client::hal_service {
@@ -79,6 +80,15 @@ public:
         const hal::ListModulesRequest*  req,
         hal::ListModulesResponse*       resp) override;
 
+    // CLI-114: shared streaming loop for all three server-streaming modes.
+    ::grpc::Status stream_loop(::grpc::ServerContext* ctx,
+                               const std::string& module_id,
+                               const google::protobuf::Any& module_config,
+                               hal::common::ExecutionMode mode,
+                               int interval_ms, int64_t duration_ms,
+                               bool run_forever,
+                               ::grpc::ServerWriter<hal::common::ResultEnvelope>* writer);
+
 private:
     // Validate a module_id against the registry.
     ::grpc::Status validate_module(const std::string& module_id);
@@ -92,6 +102,9 @@ private:
     // ── Per-session lifecycle ─────────────────────────────────────────────
     // Task 68: sessions are keyed by session_id so concurrent same-module runs
     // are independently controllable. Each start mints a unique id.
+    // CLI-111: cap on concurrent streaming sessions.
+    static constexpr size_t kMaxSessions = 8;
+
     struct Session {
         std::atomic<bool> stop_requested{false};
         std::atomic<bool> paused{false};
@@ -104,10 +117,11 @@ private:
     acquire_session(const std::string& module_id);
     void release_session(const std::string& session_id);
 
-    // Look up a session by id (exact) or, when session_id is empty, any session
-    // for the module (all-of-module semantics for Stop/Pause/Resume).
-    std::shared_ptr<Session> find_session(const std::string& module_id,
-                                          const std::string& session_id);
+    // Look up a session by id (exact) or, when session_id is empty, ALL
+    // sessions of the module (CLI-110: deterministic all-of-module semantics
+    // for Stop/Pause/Resume).
+    std::vector<std::shared_ptr<Session>>
+    find_sessions(const std::string& module_id, const std::string& session_id);
 
     std::shared_ptr<AdapterRegistry> adapter_reg_;
     const ModuleRegistry&            module_reg_;

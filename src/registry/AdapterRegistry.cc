@@ -19,11 +19,21 @@ bool AdapterRegistry::has_adapter(const std::string& module_id) const {
     return adapters_.count(module_id) > 0;
 }
 
+// CLI-104/116: stub-backed = honest unimplemented module.
+bool AdapterRegistry::is_stub_adapter(const std::string& module_id) const {
+    auto it = adapters_.find(module_id);
+    if (it == adapters_.end()) return false;
+    return it->second->is_stub();
+}
+
 std::vector<hal::TestResult> AdapterRegistry::invoke(
     const std::string& module_id,
     int mode,
     const std::vector<uint8_t>& config_bytes)
 {
+    // CLI-112: serialize every adapter invocation (HAL classes are not
+    // thread-safe; the HalService and the RunOrchestrator share this registry).
+    std::lock_guard<std::mutex> invoke_lk(invoke_mtx_);
     auto it = adapters_.find(module_id);
     if (it == adapters_.end()) {
         spdlog::warn("adapter_registry: no adapter for module_id={}; returning empty results",

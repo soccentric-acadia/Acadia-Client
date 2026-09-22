@@ -27,6 +27,9 @@ public:
     // Canonical module identifier (must match modules.yaml).
     virtual std::string module_id() const = 0;
 
+    // CLI-104/116: true for the honest stub (module without HAL source).
+    virtual bool is_stub() const { return false; }
+
     // Run the module in the given mode with the serialized config bytes.
     // Returns one or more TestResult objects — one per test (or one aggregate).
     // Implementations MUST NOT set sequence or timestamp (runner stamps those).
