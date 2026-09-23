@@ -83,11 +83,11 @@ bool StreamClient::send(ClientMessage msg) {
         // CLI-028: bounded queue — drop the OLDEST message when full.
         while (send_queue_.size() >= queue_cap_) {
             send_queue_.pop();
-            ++dropped_;
-            if (dropped_ % 100 == 1) {
+            const uint64_t dropped = ++dropped_;
+            if (dropped % 100 == 1) {
                 spdlog::warn("stream: send queue full — {} oldest message(s) dropped "
                              "(durable senders must use the spool replay)",
-                             dropped_);
+                             dropped);
             }
         }
         send_queue_.push(std::move(msg));

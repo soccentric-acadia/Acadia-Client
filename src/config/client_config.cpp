@@ -129,7 +129,7 @@ Result<ClientConfig> ClientConfig::load(const std::string& path) {
                 if (key == k) { known = true; break; }
             }
             if (!known) {
-                spdlog::warn("config: unknown key '{}' in {} (typo?)", key, path);
+                spdlog::warn("config: unknown key '{}' in {} (typo?)", key.str(), path);
             }
         }
     }
