@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-09-23 — Cross-compile fix (OS-072)
+
+- `fmt` formatting of `dropped_` and `key.str()` broke the Yocto cross-compile; fixed (`6bf0411`). acadia-client now builds into the rpi5 image.
+
 ## 2026-09-22 — HalService mode validation and regression fixes (CLI-117/118)
 
 - HalService rejects requested execution modes not declared in the module's
