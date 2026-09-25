@@ -33,5 +33,12 @@ ProtectKernelTunables=yes
 ProtectKernelModules=yes
 ProtectControlGroups=yes
 
+# VB-1: the embedded HAL needs to reach real hardware. Kept in sync with the
+# shipped meta-acadia copy of this unit — see that repo's task 010 for why
+# these groups/caps and not setuid/setcap.
+SupplementaryGroups=i2c spi gpio dialout video audio disk
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW CAP_SYSLOG
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_SYSLOG
+
 [Install]
 WantedBy=multi-user.target
