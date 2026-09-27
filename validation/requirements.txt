@@ -1,0 +1,6 @@
+# Acadia-Client remote validation suite (runs on the x86 host)
+#   python3 -m pip install -r validation/requirements.txt
+paramiko>=2.11          # SSH transport, command execution, TCP tunnels
+grpcio>=1.48            # gRPC client for HalService + mock Acadia-Server
+grpcio-tools>=1.48      # on-the-fly Python stub generation from HAL protos
+protobuf>=4.21
